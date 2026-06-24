@@ -3,14 +3,15 @@
 }
 
 :root {
-  --bg: #f7f6f4;
+  --bg: #f4f6f7;
   --surface: #ffffff;
-  --border: #e6e3df;
-  --text: #3a3633;
-  --text-muted: #9a958f;
-  --accent: #e0935c;
-  --accent-soft: #faead9;
+  --border: #e1e6e9;
+  --text: #33393d;
+  --text-muted: #8d979e;
+  --accent: #5fb3d9;
+  --accent-soft: #e7f4fa;
   --accent-text: #ffffff;
+  --danger: #d9756a;
 }
 
 html, body {

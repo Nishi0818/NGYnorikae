@@ -18,8 +18,8 @@ function addMinutes(hhmm, minutes) {
 }
 
 export default function App() {
-  const [origin, setOrigin] = useState('堀田')
-  const [destination, setDestination] = useState('浅間町')
+  const [origin, setOrigin] = useState('')
+  const [destination, setDestination] = useState('')
   const [departureTime, setDepartureTime] = useState('')
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
@@ -58,13 +58,25 @@ export default function App() {
 
       <main className="app-main">
         <section className="search-card">
-          <StationAutocomplete id="origin" label="出発駅" value={origin} onChange={setOrigin} />
+          <StationAutocomplete
+            id="origin"
+            label="出発駅"
+            value={origin}
+            onChange={setOrigin}
+            required
+          />
 
           <button className="swap-btn" onClick={handleSwap} aria-label="駅を入れ替える">
             ⇅
           </button>
 
-          <StationAutocomplete id="destination" label="到着駅" value={destination} onChange={setDestination} />
+          <StationAutocomplete
+            id="destination"
+            label="到着駅"
+            value={destination}
+            onChange={setDestination}
+            required
+          />
 
           <div className="field">
             <label htmlFor="departure-time">出発時刻（任意）</label>
@@ -76,7 +88,11 @@ export default function App() {
             />
           </div>
 
-          <button className="search-btn" onClick={handleSearch}>
+          <button
+            className="search-btn"
+            onClick={handleSearch}
+            disabled={!origin || !destination}
+          >
             検索する
           </button>
 

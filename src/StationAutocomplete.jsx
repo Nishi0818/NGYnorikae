@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ALL_STATION_NAMES } from './data/lines.js'
 
-export default function StationAutocomplete({ id, label, value, onChange }) {
+export default function StationAutocomplete({ id, label, value, onChange, required }) {
   const [text, setText] = useState(value)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -38,7 +38,7 @@ export default function StationAutocomplete({ id, label, value, onChange }) {
     setText(v)
     setOpen(true)
     setActiveIndex(-1)
-    if (v === '') onChange('')
+    onChange(v)
   }
 
   function handleKeyDown(e) {
@@ -59,13 +59,17 @@ export default function StationAutocomplete({ id, label, value, onChange }) {
 
   return (
     <div className="field autocomplete" ref={containerRef}>
-      <label htmlFor={id}>{label}</label>
+      <label htmlFor={id}>
+        {label}
+        {required && <span className="required-mark">必須</span>}
+      </label>
       <input
         id={id}
         type="text"
         value={text}
         autoComplete="off"
-        placeholder="駅名を入力"
+        placeholder="駅名を入力（例：栄）"
+        className={required && text.trim() === '' ? 'is-empty' : ''}
         onChange={handleInputChange}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKeyDown}

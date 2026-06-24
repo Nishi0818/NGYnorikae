@@ -75,13 +75,15 @@ function dijkstra(adjacency, sourceIds) {
   return { dist, prev }
 }
 
+// 名古屋市交通局の対キロ区間制運賃（2019年10月改定）に準拠
+// 1-3km:210円 / 4-7km:240円 / 8-11km:270円 / 12-15km:310円 / 16km以上:340円
 function calcFare(distanceKm) {
-  if (distanceKm <= 3) return 210
-  if (distanceKm <= 7) return 260
-  if (distanceKm <= 11) return 290
-  if (distanceKm <= 15) return 320
-  if (distanceKm <= 19) return 350
-  return 390
+  const km = Math.ceil(distanceKm)
+  if (km <= 3) return 210
+  if (km <= 7) return 240
+  if (km <= 11) return 270
+  if (km <= 15) return 310
+  return 340
 }
 
 // 経路を「同一路線の連続区間（leg）」単位にまとめる
