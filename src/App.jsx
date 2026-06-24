@@ -150,7 +150,7 @@ export default function App() {
                       </div>
                     </div>
                     {idx < result.legs.length - 1 && (
-                      <div className="transfer-note">乗り換え（+3分）</div>
+                      <div className="transfer-note">乗り換え（+6分）</div>
                     )}
                   </li>
                 )

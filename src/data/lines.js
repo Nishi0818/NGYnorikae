@@ -4,7 +4,9 @@
 // ※一部駅は近年改称: 市役所→名古屋城, 伝馬町→熱田神宮伝馬町,
 //   神宮西→熱田神宮西, 中村区役所→太閤通。現行の正式名称を採用。
 
-const KM_PER_MIN = 0.6 // 駅間所要時間の算出に使う平均速度（停車時間込みの近似）
+// 駅間の所要時間（分）を距離から近似する。実際の路線所要時間に合うように
+// 平均運転速度0.5km/分(=30km/h、停車時間込み)で計算。
+const KM_PER_MIN = 0.5
 
 function timeFromDistance(km) {
   return Math.max(1, Math.round(km / KM_PER_MIN))
@@ -144,4 +146,8 @@ export const ALL_STATION_NAMES = Array.from(
   new Set(LINE_LIST.flatMap((l) => l.stations))
 ).sort((a, b) => a.localeCompare(b, 'ja'))
 
-export const TRANSFER_MINUTES = 3
+// 乗り換え時間（分）。徒歩2-3分＋電車待ち平均3-4分を見込んで6分とする。
+export const TRANSFER_MINUTES = 6
+
+// 初乗り時の電車待ち時間（分）。経路全体の所要時間に加算する。
+export const BOARDING_MINUTES = 3

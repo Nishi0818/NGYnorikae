@@ -1,4 +1,4 @@
-import { LINE_LIST, TRANSFER_MINUTES } from '../data/lines.js'
+import { LINE_LIST, TRANSFER_MINUTES, BOARDING_MINUTES } from '../data/lines.js'
 
 // ノードID: "line:station"
 function nodeId(line, station) {
@@ -176,7 +176,7 @@ export function findRoute(originStation, destinationStation) {
   })
 
   const legs = buildLegs(path)
-  const totalTime = bestDist
+  const totalTime = bestDist + BOARDING_MINUTES
   const totalDistance = legs.reduce((sum, leg) => sum + leg.distance, 0)
   const transferCount = legs.length - 1
   const fare = calcFare(totalDistance)
