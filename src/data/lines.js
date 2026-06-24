@@ -1,18 +1,24 @@
-// 名古屋市営地下鉄 全線データ（駅・所要時間はハードコード）
-// 各路線の実際の公表所要時間（概算）に合わせて区間ごとに調整済み。
-// 距離(km)は運賃計算用に「所要時間×平均速度0.6km/分」で簡易算出する。
+// 名古屋市営地下鉄 全線データ
+// 駅順・駅間の営業キロ(km)はWikipedia掲載の公式値に準拠（2024年時点）。
+// 所要時間(分)は営業キロから平均運転速度で簡易算出する（時刻表データではない）。
+// ※一部駅は近年改称: 市役所→名古屋城, 伝馬町→熱田神宮伝馬町,
+//   神宮西→熱田神宮西, 中村区役所→太閤通。現行の正式名称を採用。
 
-const KM_PER_MIN = 0.6
+const KM_PER_MIN = 0.6 // 駅間所要時間の算出に使う平均速度（停車時間込みの近似）
 
-function buildSegments(stations, times, opts = {}) {
+function timeFromDistance(km) {
+  return Math.max(1, Math.round(km / KM_PER_MIN))
+}
+
+function buildSegments(stations, distances, opts = {}) {
   const { loop = false } = opts
   const pairCount = loop ? stations.length : stations.length - 1
   const segments = []
   for (let i = 0; i < pairCount; i++) {
     const from = stations[i]
     const to = stations[(i + 1) % stations.length]
-    const time = times[i]
-    segments.push({ from, to, time, distance: Math.round(time * KM_PER_MIN * 10) / 10 })
+    const distance = distances[i]
+    segments.push({ from, to, distance, time: timeFromDistance(distance) })
   }
   return segments
 }
@@ -25,10 +31,13 @@ export const LINES = {
     textColor: '#333333',
     stations: [
       '高畑', '八田', '岩塚', '中村公園', '中村日赤', '本陣', '亀島', '名古屋',
-      '伏見', '栄', '新栄町', '千種', '今池', '本山', '東山公園', '星ヶ丘',
-      '一社', '上社', '本郷', '藤が丘',
+      '伏見', '栄', '新栄町', '千種', '今池', '池下', '覚王山', '本山', '東山公園',
+      '星ヶ丘', '一社', '上社', '本郷', '藤が丘',
     ],
-    times: [2, 2, 2, 1, 2, 1, 2, 2, 2, 1, 2, 1, 3, 2, 2, 2, 2, 1, 2],
+    distances: [
+      0.9, 1.1, 1.1, 0.8, 0.7, 0.9, 1.1, 1.4, 1.0, 1.1, 0.9, 0.7, 0.9, 0.6, 1.0,
+      0.9, 1.1, 1.3, 1.1, 0.7, 1.3,
+    ],
   },
   meijo: {
     key: 'meijo',
@@ -37,15 +46,14 @@ export const LINES = {
     textColor: '#ffffff',
     loop: true,
     stations: [
-      '金山', '西高蔵', '神宮西', '伝馬町', '堀田', '瑞穂区役所', '瑞穂運動場東',
-      '新瑞橋', '妙音通', '川名', '御器所', '荒畑', '八事', '八事日赤',
-      '名古屋大学', '本山', '自由ヶ丘', '上社', '本郷', '砂田橋', '大曽根',
-      '平安通', '志賀本通', '黒川', '名城公園', '市役所', '久屋大通', '栄',
-      '矢場町', '上前津', '東別院',
+      '金山', '東別院', '上前津', '矢場町', '栄', '久屋大通', '名古屋城', '名城公園',
+      '黒川', '志賀本通', '平安通', '大曽根', 'ナゴヤドーム前矢田', '砂田橋', '茶屋ヶ坂',
+      '自由ヶ丘', '本山', '名古屋大学', '八事日赤', '八事', '総合リハビリセンター',
+      '瑞穂運動場東', '新瑞橋', '妙音通', '堀田', '熱田神宮伝馬町', '熱田神宮西', '西高蔵',
     ],
-    times: [
-      1, 1, 1, 2, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 2,
+    distances: [
+      0.7, 0.9, 0.7, 0.7, 0.4, 0.9, 1.1, 1.0, 1.0, 0.8, 0.7, 0.8, 0.9, 0.9, 1.2,
+      1.4, 1.0, 1.1, 1.0, 1.3, 1.0, 1.2, 0.7, 0.8, 1.2, 1.0, 0.9, 1.1,
     ],
   },
   meiko: {
@@ -54,8 +62,8 @@ export const LINES = {
     color: '#9B3F96',
     borderColor: '#ffffff',
     textColor: '#ffffff',
-    stations: ['金山', '日比野', '六番町', '東海通', '築地口', '名古屋港'],
-    times: [2, 3, 2, 3, 2],
+    stations: ['金山', '日比野', '六番町', '東海通', '港区役所', '築地口', '名古屋港'],
+    distances: [1.5, 1.1, 1.2, 0.8, 0.8, 0.6],
   },
   tsurumai: {
     key: 'tsurumai',
@@ -63,11 +71,14 @@ export const LINES = {
     color: '#00AEEF',
     textColor: '#ffffff',
     stations: [
-      '上小田井', '中小田井', '庄内緑地公園', '庄内通', '浄心', '浅間町',
-      '丸の内', '伏見', '大須観音', '上前津', '鶴舞', '荒畑', '川名', 'いりなか', '八事',
-      '植田', '原', '平針', '梅森坂', '赤池',
+      '上小田井', '庄内緑地公園', '庄内通', '浄心', '浅間町', '丸の内', '伏見',
+      '大須観音', '上前津', '鶴舞', '荒畑', '御器所', '川名', 'いりなか', '八事',
+      '塩釜口', '植田', '原', '平針', '赤池',
     ],
-    times: [2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 2],
+    distances: [
+      1.4, 1.3, 1.4, 0.8, 1.4, 0.7, 0.8, 1.0, 0.9, 1.3, 0.9, 1.2, 1.0, 0.9, 1.4,
+      1.2, 0.8, 0.9, 1.1,
+    ],
   },
   sakuradori: {
     key: 'sakuradori',
@@ -75,11 +86,14 @@ export const LINES = {
     color: '#E2231A',
     textColor: '#ffffff',
     stations: [
-      '中村区役所', '名古屋', '国際センター', '丸の内', '久屋大通', '高岳',
-      '清水', '車道', '今池', '吹上', '御器所', '桜本町', '瑞穂区役所',
-      '瑞穂運動場西', '新端橋', '野並', '鳥栖', '相生山', '神沢', '徳重',
+      '太閤通', '名古屋', '国際センター', '丸の内', '久屋大通', '高岳', '車道', '今池',
+      '吹上', '御器所', '桜山', '瑞穂区役所', '瑞穂運動場西', '新瑞橋', '桜本町', '鶴里',
+      '野並', '鳴子北', '相生山', '神沢', '徳重',
     ],
-    times: [2, 1, 1, 2, 1, 1, 1, 2, 1, 2, 1, 2, 1, 2, 2, 2, 2, 2, 2],
+    distances: [
+      0.9, 0.7, 0.8, 0.9, 0.7, 1.3, 1.0, 1.1, 1.0, 1.1, 0.9, 0.7, 0.7, 1.1, 0.9,
+      1.1, 1.1, 0.9, 1.4, 0.8,
+    ],
   },
   kamiiida: {
     key: 'kamiiida',
@@ -87,13 +101,13 @@ export const LINES = {
     color: '#F39BC4',
     textColor: '#333333',
     stations: ['平安通', '上飯田'],
-    times: [3],
+    distances: [0.8],
   },
 }
 
 export const LINE_LIST = Object.values(LINES).map((line) => ({
   ...line,
-  segments: buildSegments(line.stations, line.times, { loop: !!line.loop }),
+  segments: buildSegments(line.stations, line.distances, { loop: !!line.loop }),
 }))
 
 export const ALL_STATION_NAMES = Array.from(
