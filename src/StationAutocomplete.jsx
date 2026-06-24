@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { ALL_STATION_NAMES } from './data/lines.js'
+import { ALL_STATION_NAMES, STATION_READINGS } from './data/lines.js'
+
+// カタカナをひらがなに変換し、読み照合を揃える
+function toHiragana(str) {
+  return str.replace(/[ァ-ヶ]/g, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) - 0x60)
+  )
+}
 
 export default function StationAutocomplete({ id, label, value, onChange, required }) {
   const [text, setText] = useState(value)
@@ -21,10 +28,16 @@ export default function StationAutocomplete({ id, label, value, onChange, requir
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [])
 
+  const query = text.trim()
+  const queryHira = toHiragana(query)
   const matches =
-    text.trim() === ''
+    query === ''
       ? []
-      : ALL_STATION_NAMES.filter((name) => name.includes(text.trim())).slice(0, 8)
+      : ALL_STATION_NAMES.filter((name) => {
+          if (name.includes(query)) return true
+          const reading = STATION_READINGS[name]
+          return reading ? reading.includes(queryHira) : false
+        }).slice(0, 8)
 
   function selectStation(name) {
     setText(name)
