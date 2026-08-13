@@ -56,6 +56,12 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     expect(matchesStationQuery("浅間町", "")).toBe(true);
   });
 
+  it("読みがなの一致は前方一致のみで、無関係な駅の読みの途中にはヒットしない", () => {
+    expect(matchesStationQuery("浅間町", "せ")).toBe(true);
+    expect(matchesStationQuery("総合リハビリセンター", "せ")).toBe(false);
+    expect(matchesStationQuery("中村日赤", "せ")).toBe(false);
+  });
+
   it("曜日から平日・土休日の時刻表区分を判定する", () => {
     expect(getServiceDayType(new Date(2026, 7, 10))).toBe("weekday");
     expect(getServiceDayType(new Date(2026, 7, 15))).toBe("holiday");

@@ -230,8 +230,11 @@ export function matchesStationQuery(station: string, query: string) {
   if (!query) return true;
   const normalizedQuery = query.toLocaleLowerCase("ja");
   if (station.toLocaleLowerCase("ja").includes(normalizedQuery)) return true;
+  // 読みがなは前方一致のみ許可する。部分一致だと短い入力(例:「せ」)が
+  // 無関係な駅の読みの途中(例:総合リハビリセンター＝そうごうりはびり「せんたー」)に
+  // ヒットしてしまうため。
   const reading = STATION_READINGS[station];
-  return reading ? reading.includes(toHiragana(normalizedQuery)) : false;
+  return reading ? reading.startsWith(toHiragana(normalizedQuery)) : false;
 }
 
 function timetableKey(lineId: LineId, station: string, direction: 1 | -1) {
