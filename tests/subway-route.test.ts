@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_STATIONS,
   MINIMUM_TRANSFER_MINUTES,
+  STATION_READINGS,
   findTimedRoute,
   findTimedRouteOptions,
   getLineForStation,
   getStationsForLine,
   getTransferMinutes,
   getServiceDayType,
+  matchesStationQuery,
+  toHiragana,
 } from "../lib/subway/network";
 import { TIMETABLE_REVISIONS } from "../lib/subway/timetable-meta";
 
@@ -30,6 +33,26 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
 
   it("名港線の収録時刻表基準日を生成元のメタデータと一致させる", () => {
     expect(TIMETABLE_REVISIONS.meiko).toBe("2023-01-04");
+  });
+
+  it("全87駅に読みがなを収録する", () => {
+    expect(Object.keys(STATION_READINGS)).toHaveLength(87);
+    for (const station of ALL_STATIONS) {
+      expect(STATION_READINGS[station]).toBeTruthy();
+    }
+  });
+
+  it("カタカナをひらがなへ変換する", () => {
+    expect(toHiragana("アサマチョウ")).toBe("あさまちょう");
+    expect(toHiragana("いりなか")).toBe("いりなか");
+  });
+
+  it("駅名検索は入力途中の漢字・ひらがな・カタカナのいずれにも一致する", () => {
+    expect(matchesStationQuery("浅間町", "浅間")).toBe(true);
+    expect(matchesStationQuery("浅間町", "せんげ")).toBe(true);
+    expect(matchesStationQuery("浅間町", "セン")).toBe(true);
+    expect(matchesStationQuery("浅間町", "たかばた")).toBe(false);
+    expect(matchesStationQuery("浅間町", "")).toBe(true);
   });
 
   it("曜日から平日・土休日の時刻表区分を判定する", () => {

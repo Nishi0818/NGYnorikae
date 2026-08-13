@@ -9,12 +9,13 @@ import {
   TIMETABLE_REVISIONS,
   findTimedRouteOptions,
   formatMinutes,
-  getLineForStation,
+  getLinesForStation,
   getStationsForLine,
   getServiceDayType,
+  matchesStationQuery,
   minutesFromTimeText,
 } from "@/lib/subway/network";
-import type { LineId, RoutePreference, ServiceDayType, TimedRoute } from "@/lib/subway/types";
+import type { LineId, RoutePreference, ServiceDayType, SubwayLine, TimedRoute } from "@/lib/subway/types";
 import { loadSearchHistory, mergeSearchHistory, saveSearchHistory, type SearchHistoryEntry } from "@/lib/subway/search-history";
 
 type StationField = "origin" | "destination";
@@ -75,12 +76,38 @@ function dateLabel(date: Date | null, time: string) {
   return isToday ? `${time} 出発・きょう` : `${date.getMonth() + 1}/${date.getDate()} ${time} 出発`;
 }
 
-function StationMarker({ type, station, preferredLineId }: { type: StationField; station: string; preferredLineId?: LineId }) {
-  const line = type === "origin" ? getLineForStation(station, preferredLineId) : undefined;
+/** 名港線は名城線と同じ紫のため、単独表示のときは内側を紫・外側を白の二重丸にして見分けやすくする。 */
+function markerFill(line: SubwayLine) {
+  if (line.id === "meiko") return { background: COLORS.surface, ring: line.color, hasInnerDot: true };
+  return { background: line.color, ring: line.color, hasInnerDot: false };
+}
 
+function StationMarker({ type, station, preferredLineId }: { type: StationField; station: string; preferredLineId?: LineId }) {
+  const lines = type === "origin" ? getLinesForStation(station, preferredLineId) : [];
+  const icon = type === "origin" ? "radio-button-on" : "location";
+
+  if (lines.length < 2) {
+    const line = lines[0];
+    const fill = line && markerFill(line);
+    return (
+      <View style={[styles.marker, type === "origin" ? styles.originMarker : styles.destinationMarker, fill && { backgroundColor: fill.background, borderColor: fill.ring }]}>
+        {fill?.hasInnerDot && <View style={[styles.markerInnerDot, { backgroundColor: fill.ring }]} />}
+        <Ionicons name={icon} size={17} color={line?.textColor ?? COLORS.ink} />
+      </View>
+    );
+  }
+
+  // 2路線が乗り入れる乗換駅は、円を左右半分に分けてそれぞれの路線色を示す。
+  const [first, second] = lines;
+  const fillA = markerFill(first);
+  const fillB = markerFill(second);
   return (
-    <View style={[styles.marker, type === "origin" ? styles.originMarker : styles.destinationMarker, line && { backgroundColor: line.color, borderColor: line.color }]}>
-      <Ionicons name={type === "origin" ? "radio-button-on" : "location"} size={17} color={line?.textColor ?? COLORS.ink} />
+    <View style={[styles.marker, styles.splitMarker]}>
+      <View style={[styles.markerHalf, { backgroundColor: fillA.background }]} />
+      <View style={[styles.markerHalf, { backgroundColor: fillB.background }]} />
+      <View style={styles.markerIconBadge}>
+        <Ionicons name={icon} size={13} color={COLORS.ink} />
+      </View>
     </View>
   );
 }
@@ -240,8 +267,8 @@ export default function HomeScreen() {
   const automaticDayType = selectedDate ? getServiceDayType(selectedDate) : "weekday";
   const serviceDayType: ServiceDayType = dayMode === "auto" ? automaticDayType : dayMode;
   const stationMatches = useMemo(() => {
-    const query = stationQuery.trim().toLocaleLowerCase("ja");
-    return getStationsForLine(stationLineFilter).filter((station) => !query || station.toLocaleLowerCase("ja").includes(query));
+    const query = stationQuery.trim();
+    return getStationsForLine(stationLineFilter).filter((station) => matchesStationQuery(station, query));
   }, [stationLineFilter, stationQuery]);
   const revisionDates = Array.from(
     SUBWAY_LINES.reduce((groups, line) => {
@@ -587,7 +614,7 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.canvas }, content: { padding: 20, paddingBottom: 42 },
   topBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, brandLockup: { flexDirection: "row", alignItems: "center", gap: 8 }, brandMark: { width: 34, height: 34, borderRadius: 11, overflow: "hidden", borderWidth: 1, borderColor: "rgba(18,117,187,0.28)", shadowColor: "#1B75BB", shadowOpacity: 0.16, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, brandIcon: { width: "100%", height: "100%" }, brandName: { color: COLORS.ink, fontWeight: "800", fontSize: 14 }, topActions: { flexDirection: "row", alignItems: "center", gap: 7 }, cacheRefreshButton: { width: 32, height: 32, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.84)", borderWidth: 1, borderColor: "rgba(18,117,187,0.18)" }, offlineStatus: { flexDirection: "row", alignItems: "center", gap: 4 }, offlineText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   intro: { marginTop: 30, marginBottom: 22 }, introEyebrow: { color: COLORS.teal, fontSize: 13, fontWeight: "800" }, introTitle: { color: COLORS.ink, fontSize: 31, lineHeight: 39, fontWeight: "800", marginTop: 4, letterSpacing: -0.6 }, introHint: { color: COLORS.muted, fontSize: 13, lineHeight: 19, marginTop: 7 },
-  glassPanel: { backgroundColor: "rgba(255,255,255,0.82)", borderColor: "rgba(18,117,187,0.16)", shadowColor: "#1B75BB", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, routeCard: { position: "relative", borderWidth: 1, borderColor: COLORS.border, borderRadius: 18, backgroundColor: COLORS.surface, padding: 10 }, routeFields: { gap: 0 }, routeFieldRow: { minHeight: 60, flexDirection: "row", alignItems: "center" }, routeField: { flex: 1, minHeight: 60, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 7 }, fieldInlineClear: { width: 34, height: 34, marginRight: 4, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "rgba(11,91,149,0.06)" }, routeFieldCopy: { flex: 1 }, routeLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, routeValue: { color: COLORS.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }, routePlaceholder: { color: COLORS.lightMuted, fontWeight: "600" }, marker: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border }, originMarker: { backgroundColor: COLORS.surface }, destinationMarker: { backgroundColor: COLORS.surface }, routeConnectorRow: { height: 8, paddingLeft: 21 }, routeConnector: { height: 8, borderLeftWidth: 2, borderLeftColor: "rgba(18,117,187,0.16)" }, swapButton: { position: "absolute", right: 15, top: 47, width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.92)", borderWidth: 1, borderColor: "rgba(18,117,187,0.18)" },
+  glassPanel: { backgroundColor: "rgba(255,255,255,0.82)", borderColor: "rgba(18,117,187,0.16)", shadowColor: "#1B75BB", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, routeCard: { position: "relative", borderWidth: 1, borderColor: COLORS.border, borderRadius: 18, backgroundColor: COLORS.surface, padding: 10 }, routeFields: { gap: 0 }, routeFieldRow: { minHeight: 60, flexDirection: "row", alignItems: "center" }, routeField: { flex: 1, minHeight: 60, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 7 }, fieldInlineClear: { width: 34, height: 34, marginRight: 4, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "rgba(11,91,149,0.06)" }, routeFieldCopy: { flex: 1 }, routeLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, routeValue: { color: COLORS.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }, routePlaceholder: { color: COLORS.lightMuted, fontWeight: "600" }, marker: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border, overflow: "hidden" }, originMarker: { backgroundColor: COLORS.surface }, destinationMarker: { backgroundColor: COLORS.surface }, markerInnerDot: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8 }, splitMarker: { flexDirection: "row", borderColor: "transparent" }, markerHalf: { width: 15, height: 30 }, markerIconBadge: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8, backgroundColor: COLORS.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border }, routeConnectorRow: { height: 8, paddingLeft: 21 }, routeConnector: { height: 8, borderLeftWidth: 2, borderLeftColor: "rgba(18,117,187,0.16)" }, swapButton: { position: "absolute", left: 12, top: 47, width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.96)", borderWidth: 1, borderColor: "rgba(18,117,187,0.22)" },
   departureRow: { marginTop: 13, minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 13, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, departureIcon: { width: 31, height: 31, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(31,150,210,0.11)", borderWidth: 1, borderColor: "rgba(31,150,210,0.18)" }, departureCopy: { flex: 1 }, departureLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, departureValue: { color: COLORS.ink, fontSize: 14, fontWeight: "800", marginTop: 2 }, changeText: { color: COLORS.blue, fontSize: 12, fontWeight: "800" }, historyPanel: { marginTop: 13, borderRadius: 16, padding: 10 }, historyHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, paddingBottom: 6 }, historyTitleWrap: { flexDirection: "row", alignItems: "center", gap: 6 }, historyTitle: { color: COLORS.ink, fontSize: 12, fontWeight: "800" }, historyCaption: { color: COLORS.muted, fontSize: 10 }, historyRow: { minHeight: 48, flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "rgba(18,117,187,0.09)" }, historyEntry: { flex: 1, minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 4 }, historyRouteIcon: { width: 24, height: 24, alignItems: "center", justifyContent: "center", borderRadius: 8, backgroundColor: "rgba(11,91,149,0.08)" }, historyCopy: { flex: 1 }, historyRoute: { color: COLORS.ink, fontSize: 13, fontWeight: "700" }, historyArrow: { color: COLORS.teal }, historyMeta: { color: COLORS.muted, fontSize: 10, marginTop: 1 }, historyDelete: { width: 34, height: 34, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   errorText: { color: COLORS.danger, marginTop: 12, fontSize: 12, fontWeight: "700" }, primaryButton: { minHeight: 56, borderRadius: 15, marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, backgroundColor: COLORS.navy, shadowColor: "#1B75BB", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3 }, primaryButtonLoading: { opacity: 0.78 }, searchIconTile: { width: 28, height: 28, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#1B75BB", borderWidth: 1, borderColor: "rgba(245,196,0,0.72)" }, primaryButtonText: { color: COLORS.surface, fontSize: 16, fontWeight: "800" },
   searchHint: { marginTop: 14, color: COLORS.muted, fontSize: 11, textAlign: "center" },

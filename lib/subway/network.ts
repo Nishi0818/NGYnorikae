@@ -113,6 +113,97 @@ export const SUBWAY_LINES: readonly SubwayLine[] = [
 
 export const ALL_STATIONS = Array.from(new Set(SUBWAY_LINES.flatMap((line) => line.stations))).sort((a, b) => a.localeCompare(b, "ja"));
 
+/** 駅名のひらがな読み。かな入力での予測変換に使う。 */
+export const STATION_READINGS: Readonly<Record<string, string>> = {
+  "高畑": "たかばた",
+  "八田": "はった",
+  "岩塚": "いわつか",
+  "中村公園": "なかむらこうえん",
+  "中村日赤": "なかむらにっせき",
+  "本陣": "ほんじん",
+  "亀島": "かめじま",
+  "名古屋": "なごや",
+  "伏見": "ふしみ",
+  "栄": "さかえ",
+  "新栄町": "しんさかえまち",
+  "千種": "ちくさ",
+  "今池": "いまいけ",
+  "池下": "いけした",
+  "覚王山": "かくおうざん",
+  "本山": "もとやま",
+  "東山公園": "ひがしやまこうえん",
+  "星ヶ丘": "ほしがおか",
+  "一社": "いっしゃ",
+  "上社": "かみやしろ",
+  "本郷": "ほんごう",
+  "藤が丘": "ふじがおか",
+  "金山": "かなやま",
+  "東別院": "ひがしべついん",
+  "上前津": "かみまえづ",
+  "矢場町": "やばちょう",
+  "久屋大通": "ひさやおおどおり",
+  "名古屋城": "なごやじょう",
+  "名城公園": "めいじょうこうえん",
+  "黒川": "くろかわ",
+  "志賀本通": "しがほんどおり",
+  "平安通": "へいあんどおり",
+  "大曽根": "おおぞね",
+  "ナゴヤドーム前矢田": "なごやどーむまえやだ",
+  "砂田橋": "すなだばし",
+  "茶屋ヶ坂": "ちゃやがさか",
+  "自由ヶ丘": "じゆうがおか",
+  "名古屋大学": "なごやだいがく",
+  "八事日赤": "やごとにっせき",
+  "八事": "やごと",
+  "総合リハビリセンター": "そうごうりはびりせんたー",
+  "瑞穂運動場東": "みずほうんどうじょうひがし",
+  "新瑞橋": "あらたまばし",
+  "妙音通": "みょうおんどおり",
+  "堀田": "ほりた",
+  "熱田神宮伝馬町": "あつたじんぐうてんまちょう",
+  "熱田神宮西": "あつたじんぐうにし",
+  "西高蔵": "にしたかくら",
+  "日比野": "ひびの",
+  "六番町": "ろくばんちょう",
+  "東海通": "とうかいどおり",
+  "港区役所": "みなとくやくしょ",
+  "築地口": "つきじぐち",
+  "名古屋港": "なごやこう",
+  "上小田井": "かみおたい",
+  "庄内緑地公園": "しょうないりょくちこうえん",
+  "庄内通": "しょうないどおり",
+  "浄心": "じょうしん",
+  "浅間町": "せんげんちょう",
+  "丸の内": "まるのうち",
+  "大須観音": "おおすかんのん",
+  "鶴舞": "つるまい",
+  "荒畑": "あらはた",
+  "御器所": "ごきそ",
+  "川名": "かわな",
+  "いりなか": "いりなか",
+  "塩釜口": "しおがまぐち",
+  "植田": "うえだ",
+  "原": "はら",
+  "平針": "ひらばり",
+  "赤池": "あかいけ",
+  "太閤通": "たいこうどおり",
+  "国際センター": "こくさいせんたー",
+  "高岳": "たかおか",
+  "車道": "くるまみち",
+  "吹上": "ふきあげ",
+  "桜山": "さくらやま",
+  "瑞穂区役所": "みずほくやくしょ",
+  "瑞穂運動場西": "みずほうんどうじょうにし",
+  "桜本町": "さくらほんまち",
+  "鶴里": "つるさと",
+  "野並": "のなみ",
+  "鳴子北": "なるこきた",
+  "相生山": "あいおいやま",
+  "神沢": "かみさわ",
+  "徳重": "とくしげ",
+  "上飯田": "かみいいだ",
+};
+
 const lineById = new Map<LineId, SubwayLine>(SUBWAY_LINES.map((line) => [line.id, line]));
 const linesByStation = new Map<string, SubwayLine[]>();
 for (const line of SUBWAY_LINES) {
@@ -124,6 +215,23 @@ for (const line of SUBWAY_LINES) {
 /** 駅選択で使う、指定路線の駅一覧。全路線指定時は五十音順の全駅を返す。 */
 export function getStationsForLine(lineId: LineId | "all") {
   return lineId === "all" ? ALL_STATIONS : lineById.get(lineId)?.stations ?? [];
+}
+
+/** カタカナをひらがなに変換する。読みがな入力の予測変換で表記を揃えるために使う。 */
+export function toHiragana(text: string) {
+  return text.replace(/[ァ-ヶ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+}
+
+/**
+ * 駅名検索で、入力途中の漢字・ひらがな・カタカナのいずれでも候補に出るようにする。
+ * 駅名そのものへの部分一致に加え、読みがな(STATION_READINGS)への部分一致も許可する。
+ */
+export function matchesStationQuery(station: string, query: string) {
+  if (!query) return true;
+  const normalizedQuery = query.toLocaleLowerCase("ja");
+  if (station.toLocaleLowerCase("ja").includes(normalizedQuery)) return true;
+  const reading = STATION_READINGS[station];
+  return reading ? reading.includes(toHiragana(normalizedQuery)) : false;
 }
 
 function timetableKey(lineId: LineId, station: string, direction: 1 | -1) {
@@ -353,4 +461,13 @@ export function getLine(lineId: LineId) {
 export function getLineForStation(station: string, preferredLineId?: LineId) {
   const lines = linesByStation.get(station) ?? [];
   return lines.find((line) => line.id === preferredLineId) ?? lines[0];
+}
+
+/** 駅に乗り入れる全路線。乗換駅の色分け表示などに使う。優先路線があれば先頭に並べる。 */
+export function getLinesForStation(station: string, preferredLineId?: LineId) {
+  const lines = linesByStation.get(station) ?? [];
+  if (!preferredLineId) return lines;
+  const preferred = lines.filter((line) => line.id === preferredLineId);
+  const rest = lines.filter((line) => line.id !== preferredLineId);
+  return [...preferred, ...rest];
 }
