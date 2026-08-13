@@ -16,3 +16,4 @@
 - 2026-08-13: `Nishi0818/NGYnorikae` のmainブランチへ静的ウェブ版をコミット `9264c33` として反映した。GitHub上ではVercelのデプロイチェックが開始直後のpending状態であり、既存本番URLは更新反映待ちである。
 - 2026-08-13: GitHubのデプロイ記録で、Vercelがコミット `9264c33` のデプロイを成功として完了したことを確認した。生成先は `nagoya-subway-losuwszjs-ni3.vercel.app` だが、外部ブラウザからはVercelログイン要求となり、既存の `nagoya-subway.vercel.app` には旧Vite版が残っている。Vercel側での本番エイリアス状態を確認する必要がある。
 - 2026-08-13: 最短／乗換少なめの比較とブラウザ端末内の検索履歴を追加した。型検査、経路探索10件、履歴処理2件のテスト、およびVercelと同一の静的ウェブビルドが成功した。
+- 2026-08-13: コミット `e88f37d` をGitHubのmainへ反映し、Vercelデプロイ成功を確認した。正式URL `https://nagoya-subway.vercel.app` はNAGOYA SUBWAYの最新検索ホームを配信している。
