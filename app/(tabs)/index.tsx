@@ -14,6 +14,7 @@ import {
   getLinesForStation,
   getStationsForLine,
   getServiceDayType,
+  japaneseHolidayName,
   matchesStationQuery,
   minutesFromTimeText,
 } from "@/lib/subway/network";
@@ -299,6 +300,7 @@ export default function HomeScreen() {
 
   const selectedDate = parseDateInput(dateText);
   const automaticDayType = selectedDate ? getServiceDayType(selectedDate) : "weekday";
+  const automaticHolidayName = selectedDate ? japaneseHolidayName(selectedDate) : null;
   const serviceDayType: ServiceDayType = dayMode === "auto" ? automaticDayType : dayMode;
   const stationMatches = useMemo(() => {
     const query = stationQuery.trim();
@@ -672,9 +674,9 @@ export default function HomeScreen() {
             <View style={styles.optionInput}><Ionicons name="time-outline" size={18} color={COLORS.navy} /><TextInput value={timeText} onChangeText={setTimeText} placeholder="HH:MM" placeholderTextColor={COLORS.lightMuted} style={styles.optionTextInput} keyboardType={Platform.OS === "ios" ? "numbers-and-punctuation" : "default"} /></View>
           </View>
           <View style={styles.optionSection}>
-            <View style={styles.optionHeading}><Text style={styles.optionLabel}>時刻表の種別</Text><Text style={styles.autoText}>自動: {dayLabel(automaticDayType)}</Text></View>
+            <View style={styles.optionHeading}><Text style={styles.optionLabel}>時刻表の種別</Text><Text style={styles.autoText}>自動: {dayLabel(automaticDayType)}{automaticHolidayName ? `(${automaticHolidayName})` : ""}</Text></View>
             <View style={styles.segmented}>{([ ["auto", "自動"], ["weekday", "平日"], ["holiday", "土休日"] ] as const).map(([value, label]) => <Pressable key={value} style={[styles.segment, dayMode === value && styles.segmentActive]} onPress={() => setDayMode(value)}><Text style={[styles.segmentText, dayMode === value && styles.segmentTextActive]}>{label}</Text></Pressable>)}</View>
-            <Text style={styles.optionHint}>祝日は「土休日」を選択してください。</Text>
+            <Text style={styles.optionHint}>祝日・振替休日も自動で「土休日」として判定します。</Text>
           </View>
           <Pressable style={styles.applyButton} onPress={() => setShowOptions(false)} accessibilityRole="button"><Text style={styles.applyButtonText}>条件を反映</Text></Pressable>
         </SafeAreaView>

@@ -1,7 +1,8 @@
+import { japaneseHolidayName, isJapaneseHoliday } from "./holidays";
 import { TIMETABLE_REVISIONS, type OfflineTimetables } from "./timetable-meta";
 import type { LineId, RouteLeg, RoutePreference, ServiceDayType, SubwayLine, TimedRoute } from "./types";
 
-export { TIMETABLE_REVISIONS };
+export { TIMETABLE_REVISIONS, japaneseHolidayName };
 
 let offlineTimetablesPromise: Promise<OfflineTimetables> | undefined;
 
@@ -287,7 +288,7 @@ export function minutesFromTimeText(time: string) {
 
 export function getServiceDayType(date: Date): ServiceDayType {
   const day = date.getDay();
-  return day === 0 || day === 6 ? "holiday" : "weekday";
+  return day === 0 || day === 6 || isJapaneseHoliday(date) ? "holiday" : "weekday";
 }
 
 function calculateFare(distanceKm: number) {
