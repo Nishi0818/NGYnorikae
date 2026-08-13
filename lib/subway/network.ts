@@ -352,7 +352,7 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
   departureMinutes: number;
   dayType: ServiceDayType;
   preference?: RoutePreference;
-}): TimedRoute | null {
+}, excludedTransferStations?: ReadonlySet<string>): TimedRoute | null {
   if (!origin || !destination || origin === destination || !linesByStation.has(origin) || !linesByStation.has(destination)) {
     return null;
   }
@@ -374,6 +374,7 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
 
     for (const candidateLine of linesByStation.get(current.station) ?? []) {
       const isTransfer = current.lineId !== null && current.lineId !== candidateLine.id;
+      if (isTransfer && excludedTransferStations?.has(current.station)) continue;
       const transferMinutes = isTransfer && current.lineId ? getTransferMinutes(current.station, current.lineId, candidateLine.id) : 0;
       const readyAt = current.arrivalMinutes + transferMinutes;
       for (const direction of [1, -1] as const) {
@@ -451,6 +452,50 @@ export async function findTimedRouteOptions(params: {
     fastest: findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" }),
     fewestTransfers: findTimedRouteFromTimetables(timetables, { ...params, preference: "fewestTransfers" }),
   };
+}
+
+function transferStationsOf(route: TimedRoute) {
+  return new Set(route.legs.slice(1).map((leg) => leg.boardStation));
+}
+
+function sameTransferStations(a: ReadonlySet<string>, b: ReadonlySet<string>) {
+  return a.size === b.size && [...a].every((station) => b.has(station));
+}
+
+/**
+ * 同じ出発・到着駅でも、経由する乗換駅が異なる候補が存在する場合にそれを提示する。
+ * 最速経路が使う乗換駅を除外して再探索し、別の乗換駅を通る経路が見つかれば
+ * 到着時刻順に最大2件を返す。直通・代替が見つからない場合は1件のみ返す。
+ */
+function findTransferAlternativesFromTimetables(timetables: OfflineTimetables, params: {
+  origin: string;
+  destination: string;
+  departureMinutes: number;
+  dayType: ServiceDayType;
+}): TimedRoute[] {
+  const primary = findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" });
+  if (!primary || primary.legs.length <= 1) return primary ? [primary] : [];
+
+  const usedTransferStations = transferStationsOf(primary);
+  const alternative = findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" }, usedTransferStations);
+  if (!alternative || alternative.legs.length === 0) return [primary];
+
+  const alternativeTransferStations = transferStationsOf(alternative);
+  if (sameTransferStations(usedTransferStations, alternativeTransferStations)) return [primary];
+
+  return [primary, alternative].sort((a, b) => a.arrivalMinutes - b.arrivalMinutes);
+}
+
+export async function findTransferAlternatives(params: {
+  origin: string;
+  destination: string;
+  departureMinutes: number;
+  dayType: ServiceDayType;
+}): Promise<TimedRoute[]> {
+  if (!params.origin || !params.destination || params.origin === params.destination || !linesByStation.has(params.origin) || !linesByStation.has(params.destination)) {
+    return [];
+  }
+  return findTransferAlternativesFromTimetables(await loadOfflineTimetables(), params);
 }
 
 export function getLine(lineId: LineId) {

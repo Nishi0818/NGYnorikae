@@ -6,6 +6,7 @@ import {
   STATION_READINGS,
   findTimedRoute,
   findTimedRouteOptions,
+  findTransferAlternatives,
   getLineForStation,
   getStationsForLine,
   getTransferMinutes,
@@ -144,6 +145,31 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     expect(options.fastest).not.toBeNull();
     expect(options.fewestTransfers).not.toBeNull();
     expect(options.fewestTransfers?.transferCount).toBeLessThanOrEqual(options.fastest?.transferCount ?? Infinity);
+  });
+
+  it("浅間町から名古屋は、丸の内経由と伏見経由の2つの乗換パターンを返す", async () => {
+    const alternatives = await findTransferAlternatives({
+      origin: "浅間町",
+      destination: "名古屋",
+      departureMinutes: 8 * 60,
+      dayType: "weekday",
+    });
+
+    expect(alternatives).toHaveLength(2);
+    const viaStations = alternatives.map((route) => route.legs[1]?.boardStation).sort();
+    expect(viaStations).toEqual(["丸の内", "伏見"].sort());
+    expect(alternatives[0].arrivalMinutes).toBeLessThanOrEqual(alternatives[1].arrivalMinutes);
+  });
+
+  it("直通経路や代替が無い場合は1件だけ返す", async () => {
+    const direct = await findTransferAlternatives({
+      origin: "高畑",
+      destination: "藤が丘",
+      departureMinutes: 8 * 60,
+      dayType: "weekday",
+    });
+    expect(direct).toHaveLength(1);
+    expect(direct[0].transferCount).toBe(0);
   });
 
   it("対象外の駅が指定された場合は、誤った候補を返さない", async () => {
