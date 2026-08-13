@@ -1,0 +1,109 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  ALL_STATIONS,
+  MINIMUM_TRANSFER_MINUTES,
+  findTimedRoute,
+  getLineForStation,
+  getTransferMinutes,
+  getServiceDayType,
+} from "../lib/subway/network";
+
+describe("名古屋市営地下鉄オフライン経路探索", () => {
+  it("全6路線の駅を検索候補として収録する", () => {
+    expect(ALL_STATIONS).toContain("高畑");
+    expect(ALL_STATIONS).toContain("名古屋港");
+    expect(ALL_STATIONS).toContain("赤池");
+    expect(ALL_STATIONS).toContain("徳重");
+    expect(ALL_STATIONS).toContain("上飯田");
+  });
+
+  it("曜日から平日・土休日の時刻表区分を判定する", () => {
+    expect(getServiceDayType(new Date(2026, 7, 10))).toBe("weekday");
+    expect(getServiceDayType(new Date(2026, 7, 15))).toBe("holiday");
+  });
+
+  it("駅・路線ペアごとの乗換時間を対称に参照し、未設定値には既定値を使う", () => {
+    expect(getTransferMinutes("金山", "meijo", "meiko")).toBe(2);
+    expect(getTransferMinutes("金山", "meiko", "meijo")).toBe(2);
+    expect(getTransferMinutes("名古屋", "higashiyama", "sakuradori")).toBe(7);
+    expect(getTransferMinutes("伏見", "higashiyama", "sakuradori")).toBe(MINIMUM_TRANSFER_MINUTES);
+  });
+
+  it("出発マーカーは駅の路線色を使い、経路が確定した場合は最初の乗車路線を優先する", () => {
+    expect(getLineForStation("ナゴヤドーム前矢田")?.color).toBe("#8E3A90");
+    expect(getLineForStation("名古屋", "sakuradori")?.color).toBe("#E24B3B");
+    expect(getLineForStation("名古屋", "higashiyama")?.color).toBe("#F5C400");
+  });
+
+  it("同一路線の経路で、指定時刻以降の公式収録時刻表から列車を選択する", async () => {
+    const route = await findTimedRoute({
+      origin: "高畑",
+      destination: "藤が丘",
+      departureMinutes: 8 * 60,
+      dayType: "weekday",
+    });
+
+    expect(route).not.toBeNull();
+    expect(route?.actualDepartureMinutes).toBeGreaterThanOrEqual(8 * 60);
+    expect(route?.arrivalMinutes).toBeGreaterThan(route?.actualDepartureMinutes ?? 0);
+    expect(route?.legs).toHaveLength(1);
+    expect(route?.legs[0]?.lineName).toBe("東山線");
+  });
+
+  it("土休日区分でも同梱した休日時刻表から列車を選択する", async () => {
+    const route = await findTimedRoute({
+      origin: "高畑",
+      destination: "名古屋",
+      departureMinutes: 8 * 60,
+      dayType: "holiday",
+    });
+
+    expect(route).not.toBeNull();
+    expect(route?.actualDepartureMinutes).toBeGreaterThanOrEqual(8 * 60);
+    expect(route?.legs[0]?.lineName).toBe("東山線");
+  });
+
+  it("乗換を含む経路では最低乗換時間を接続条件に含める", async () => {
+    const route = await findTimedRoute({
+      origin: "栄",
+      destination: "名古屋港",
+      departureMinutes: 8 * 60,
+      dayType: "weekday",
+    });
+
+    expect(route).not.toBeNull();
+    expect(route?.transferCount).toBeGreaterThanOrEqual(1);
+    expect(route?.legs.length).toBeGreaterThanOrEqual(2);
+    const transferMinutes = getTransferMinutes("金山", "meijo", "meiko");
+    expect(route?.legs[1]?.transferMinutes).toBe(transferMinutes);
+    expect(route?.legs[1]?.departureMinutes).toBeGreaterThanOrEqual(
+      (route?.legs[0]?.arrivalMinutes ?? 0) + transferMinutes,
+    );
+  });
+
+  it("一社から丸の内は伏見で鶴舞線へ乗り換える経路を返す", async () => {
+    const route = await findTimedRoute({
+      origin: "一社",
+      destination: "丸の内",
+      departureMinutes: 10 * 60 + 9,
+      dayType: "weekday",
+    });
+
+    expect(route?.transferCount).toBe(1);
+    expect(route?.legs).toHaveLength(2);
+    expect(route?.legs[0]).toMatchObject({ lineName: "東山線", alightStation: "伏見" });
+    expect(route?.legs[1]).toMatchObject({ lineName: "鶴舞線", boardStation: "伏見", alightStation: "丸の内" });
+  });
+
+  it("対象外の駅が指定された場合は、誤った候補を返さない", async () => {
+    const route = await findTimedRoute({
+      origin: "存在しない駅",
+      destination: "栄",
+      departureMinutes: 8 * 60,
+      dayType: "weekday",
+    });
+
+    expect(route).toBeNull();
+  });
+});
