@@ -10,6 +10,8 @@ export type SearchHistoryEntry = {
   dateText: string;
   timeText: string;
   dayMode: "auto" | ServiceDayType;
+  /** 出発時刻指定か到着時刻指定か。旧バージョンで保存された履歴には無いため、読み込み時は出発時刻指定として扱う。 */
+  timeMode?: "departure" | "arrival";
   savedAt: string;
 };
 
@@ -22,6 +24,7 @@ function isSearchHistoryEntry(value: unknown): value is SearchHistoryEntry {
     && typeof entry.dateText === "string"
     && typeof entry.timeText === "string"
     && (entry.dayMode === "auto" || entry.dayMode === "weekday" || entry.dayMode === "holiday")
+    && (entry.timeMode === undefined || entry.timeMode === "departure" || entry.timeMode === "arrival")
     && typeof entry.savedAt === "string";
 }
 

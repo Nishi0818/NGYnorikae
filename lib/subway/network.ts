@@ -248,6 +248,22 @@ function findNextDeparture(timetables: OfflineTimetables, lineId: LineId, statio
   return times.find((time) => time >= readyAt) ?? null;
 }
 
+/** 指定駅から出ている実在の便(全路線・全方向)の発車時刻を、重複を除いて集める。到着時刻指定の検索で使う。 */
+function collectDepartureCandidates(timetables: OfflineTimetables, station: string, dayType: ServiceDayType): number[] {
+  const candidates = new Set<number>();
+  for (const line of linesByStation.get(station) ?? []) {
+    for (const direction of [1, -1] as const) {
+      const schedule = timetables[timetableKey(line.id, station, direction)];
+      if (!schedule) continue;
+      for (const time of schedule[dayType] as readonly number[]) {
+        candidates.add(time);
+      }
+    }
+  }
+  // 遅い順。到着時刻指定では「間に合う一番遅い出発」を先頭から見つけたいため。
+  return [...candidates].sort((a, b) => b - a);
+}
+
 function segmentTravelMinutes(distanceKm: number) {
   return Math.max(1, Math.round(distanceKm / 0.5));
 }
@@ -301,6 +317,30 @@ type SearchScore = {
 
 function transferCountForLegs(legs: readonly RouteLeg[]) {
   return legs.slice(1).filter((leg, index) => leg.lineId !== legs[index]?.lineId).length;
+}
+
+/**
+ * 探索の途中経過として同一路線・同一方向の区間が連続して確定することがある(実際に乗換した
+ * わけではなく、時刻表の精度を上げるために内部的に途中駅で一旦区切っただけ)。利用者には
+ * 1本の乗車として見せるため、隣接する同一路線の区間はここでまとめる。
+ */
+function mergeConsecutiveSameLineLegs(legs: readonly RouteLeg[]): RouteLeg[] {
+  const merged: RouteLeg[] = [];
+  for (const leg of legs) {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.lineId === leg.lineId) {
+      merged[merged.length - 1] = {
+        ...previous,
+        alightStation: leg.alightStation,
+        arrivalMinutes: leg.arrivalMinutes,
+        rideMinutes: Math.max(0, leg.arrivalMinutes - previous.departureMinutes),
+        distanceKm: previous.distanceKm + leg.distanceKm,
+      };
+    } else {
+      merged.push(leg);
+    }
+  }
+  return merged;
 }
 
 function scoreForState(state: SearchState): SearchScore {
@@ -414,20 +454,71 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
   }
 
   if (!bestResult) return null;
-  const distanceKm = bestResult.legs.reduce((total, leg) => total + leg.distanceKm, 0);
-  const transferCount = transferCountForLegs(bestResult.legs);
+  const legs = mergeConsecutiveSameLineLegs(bestResult.legs);
+  const distanceKm = legs.reduce((total, leg) => total + leg.distanceKm, 0);
+  const transferCount = transferCountForLegs(legs);
   return {
     origin,
     destination,
     requestedDepartureMinutes: departureMinutes,
-    actualDepartureMinutes: bestResult.legs[0].departureMinutes,
+    actualDepartureMinutes: legs[0].departureMinutes,
     arrivalMinutes: bestResult.arrivalMinutes,
     totalMinutes: bestResult.arrivalMinutes - departureMinutes,
     transferCount,
     fare: calculateFare(distanceKm),
     distanceKm,
-    legs: bestResult.legs,
+    legs,
   };
+}
+
+/**
+ * 到着時刻を起点に経路を探す。出発時刻をずらして何度も前向き探索(`findTimedRouteFromTimetables`)を
+ * やり直すのではなく、出発駅の実在する発車時刻(全路線・全方向)だけを候補にして絞り込む。
+ * 発車時刻の候補は2つの発車時刻の間であれば結果が変わらない(前向き探索は「次の実在の発車」に
+ * 丸め込むため)ため、実在する発車時刻だけを試せば取りこぼしがない。
+ *
+ * 手作りの逆向き探索(区間ごとに乗車・降車の時刻表を個別に読み解いて組み立てる方式)も実装したが、
+ * 区間所要時間があくまで概算であるため、乗換を挟む経路で前向き探索と結果が食い違う(到着時刻を
+ * 実際より遅く見積もる、最遅の出発を取り逃す)ケースが実データで見つかった。既存の前向き探索は
+ * 経路探索テスト・広域クロスチェックの両方で検証済みのため、到着時刻指定でも最終的な経路の組み立ては
+ * 必ず前向き探索に委ね、探索範囲を絞り込む用途に徹することで、両者が常に一致するようにしている。
+ */
+function findTimedRouteByArrivalFromTimetables(timetables: OfflineTimetables, {
+  origin,
+  destination,
+  arrivalByMinutes,
+  dayType,
+  preference = "fastest",
+}: {
+  origin: string;
+  destination: string;
+  arrivalByMinutes: number;
+  dayType: ServiceDayType;
+  preference?: RoutePreference;
+}): TimedRoute | null {
+  if (!origin || !destination || origin === destination || !linesByStation.has(origin) || !linesByStation.has(destination)) {
+    return null;
+  }
+
+  const candidates = collectDepartureCandidates(timetables, origin, dayType).filter((time) => time <= arrivalByMinutes);
+  let best: TimedRoute | null = null;
+  for (const departureMinutes of candidates) {
+    const route = findTimedRouteFromTimetables(timetables, { origin, destination, departureMinutes, dayType, preference });
+    if (!route || route.arrivalMinutes > arrivalByMinutes) continue;
+    if (!best) {
+      best = route;
+      // 候補は出発時刻の遅い順に並んでいるため、「最短(到着優先)」ではここで見つかった時点で
+      // それ以上遅い出発は存在しない=最適が確定しており、以降を調べても更新され得ない。
+      if (preference !== "fewestTransfers") break;
+      continue;
+    }
+    const better = preference === "fewestTransfers"
+      ? route.transferCount < best.transferCount
+        || (route.transferCount === best.transferCount && route.actualDepartureMinutes > best.actualDepartureMinutes)
+      : route.actualDepartureMinutes > best.actualDepartureMinutes;
+    if (better) best = route;
+  }
+  return best;
 }
 
 export async function findTimedRoute(params: {
@@ -454,6 +545,34 @@ export async function findTimedRouteOptions(params: {
   return {
     fastest: findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" }),
     fewestTransfers: findTimedRouteFromTimetables(timetables, { ...params, preference: "fewestTransfers" }),
+  };
+}
+
+/** 到着時刻を指定して、それまでに着く経路をさかのぼって探す版の `findTimedRoute`。 */
+export async function findTimedRouteByArrival(params: {
+  origin: string;
+  destination: string;
+  arrivalByMinutes: number;
+  dayType: ServiceDayType;
+  preference?: RoutePreference;
+}): Promise<TimedRoute | null> {
+  if (!params.origin || !params.destination || params.origin === params.destination || !linesByStation.has(params.origin) || !linesByStation.has(params.destination)) {
+    return null;
+  }
+  return findTimedRouteByArrivalFromTimetables(await loadOfflineTimetables(), params);
+}
+
+/** 到着時刻を指定した場合の「最短(=一番遅く出発できる)」「乗換少なめ」の比較ペア。 */
+export async function findTimedRouteByArrivalOptions(params: {
+  origin: string;
+  destination: string;
+  arrivalByMinutes: number;
+  dayType: ServiceDayType;
+}): Promise<Record<RoutePreference, TimedRoute | null>> {
+  const timetables = await loadOfflineTimetables();
+  return {
+    fastest: findTimedRouteByArrivalFromTimetables(timetables, { ...params, preference: "fastest" }),
+    fewestTransfers: findTimedRouteByArrivalFromTimetables(timetables, { ...params, preference: "fewestTransfers" }),
   };
 }
 

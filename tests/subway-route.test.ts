@@ -5,6 +5,8 @@ import {
   MINIMUM_TRANSFER_MINUTES,
   STATION_READINGS,
   findTimedRoute,
+  findTimedRouteByArrival,
+  findTimedRouteByArrivalOptions,
   findTimedRouteOptions,
   findTransferAlternatives,
   getLineForStation,
@@ -153,6 +155,102 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     expect(options.fewestTransfers?.transferCount).toBeLessThanOrEqual(options.fastest?.transferCount ?? Infinity);
   });
 
+  it("到着時刻指定でも同一路線の直通経路を返し、指定時刻までに到着する", async () => {
+    const route = await findTimedRouteByArrival({
+      origin: "高畑",
+      destination: "藤が丘",
+      arrivalByMinutes: 9 * 60,
+      dayType: "weekday",
+    });
+
+    expect(route).not.toBeNull();
+    expect(route?.arrivalMinutes).toBeLessThanOrEqual(9 * 60);
+    expect(route?.actualDepartureMinutes).toBeLessThan(route?.arrivalMinutes ?? 0);
+    expect(route?.legs).toHaveLength(1);
+    expect(route?.legs[0]?.lineName).toBe("東山線");
+  });
+
+  it("到着時刻指定の結果は、同じ出発時刻で前向き検索した結果と一致する(往復整合性)", async () => {
+    const byArrival = await findTimedRouteByArrival({
+      origin: "高畑",
+      destination: "藤が丘",
+      arrivalByMinutes: 9 * 60,
+      dayType: "weekday",
+    });
+    expect(byArrival).not.toBeNull();
+
+    const byDeparture = await findTimedRoute({
+      origin: "高畑",
+      destination: "藤が丘",
+      departureMinutes: byArrival!.actualDepartureMinutes,
+      dayType: "weekday",
+    });
+
+    expect(byDeparture).not.toBeNull();
+    expect(byDeparture?.arrivalMinutes).toBe(byArrival?.arrivalMinutes);
+    expect(byDeparture?.legs.map((leg) => ({ ...leg, distanceKm: undefined }))).toEqual(
+      byArrival?.legs.map((leg) => ({ ...leg, distanceKm: undefined })),
+    );
+    expect(byDeparture?.distanceKm).toBeCloseTo(byArrival?.distanceKm ?? -1, 6);
+  });
+
+  it("到着時刻指定でも乗換を含む経路を、乗換時間を確保して返す(前向き検索との往復整合性で検証)", async () => {
+    const route = await findTimedRouteByArrival({
+      origin: "一社",
+      destination: "丸の内",
+      arrivalByMinutes: 11 * 60,
+      dayType: "weekday",
+    });
+
+    expect(route).not.toBeNull();
+    expect(route?.arrivalMinutes).toBeLessThanOrEqual(11 * 60);
+    expect(route?.transferCount).toBeGreaterThanOrEqual(1);
+    expect(route?.legs.length).toBeGreaterThanOrEqual(2);
+
+    // 乗換区間は、実際に採用された乗換駅・路線の組合せに対する最低乗換時間を満たしていること。
+    const transferLeg = route!.legs[1];
+    const previousLeg = route!.legs[0];
+    const expectedTransferMinutes = getTransferMinutes(transferLeg.boardStation, previousLeg.lineId, transferLeg.lineId);
+    expect(transferLeg.transferMinutes).toBe(expectedTransferMinutes);
+    expect(transferLeg.departureMinutes).toBeGreaterThanOrEqual(previousLeg.arrivalMinutes + expectedTransferMinutes);
+
+    // 同じ出発時刻で前向き検索しても、同一の経路・同一の到着時刻になること(採用した乗換駅によらず正しいことの確認)。
+    const forward = await findTimedRoute({
+      origin: "一社",
+      destination: "丸の内",
+      departureMinutes: route!.actualDepartureMinutes,
+      dayType: "weekday",
+    });
+    expect(forward?.arrivalMinutes).toBe(route?.arrivalMinutes);
+    expect(forward?.legs.map((leg) => leg.lineId)).toEqual(route?.legs.map((leg) => leg.lineId));
+  });
+
+  it("到着時刻指定の最短と乗換少なめは、乗換少なめの方が乗換回数を増やさない", async () => {
+    const options = await findTimedRouteByArrivalOptions({
+      origin: "一社",
+      destination: "丸の内",
+      arrivalByMinutes: 11 * 60,
+      dayType: "weekday",
+    });
+
+    expect(options.fastest).not.toBeNull();
+    expect(options.fewestTransfers).not.toBeNull();
+    expect(options.fastest?.arrivalMinutes).toBeLessThanOrEqual(11 * 60);
+    expect(options.fewestTransfers?.arrivalMinutes).toBeLessThanOrEqual(11 * 60);
+    expect(options.fewestTransfers?.transferCount).toBeLessThanOrEqual(options.fastest?.transferCount ?? Infinity);
+  });
+
+  it("到着時刻指定でも対象外の駅では誤った候補を返さない", async () => {
+    const route = await findTimedRouteByArrival({
+      origin: "存在しない駅",
+      destination: "栄",
+      arrivalByMinutes: 9 * 60,
+      dayType: "weekday",
+    });
+
+    expect(route).toBeNull();
+  });
+
   it("浅間町から名古屋は、丸の内経由と伏見経由の2つの乗換パターンを返す", async () => {
     const alternatives = await findTransferAlternatives({
       origin: "浅間町",
@@ -187,5 +285,58 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     });
 
     expect(route).toBeNull();
+  });
+
+  describe("到着時刻指定の広域整合性(前向き検索との突き合わせ)", () => {
+    // 出発駅・到着駅・到着期限をランダムに組み合わせ、到着時刻指定の結果が
+    //   1) 同じ出発時刻で前向き検索した結果と完全に一致する
+    //   2) 1分でも遅く出発すると期限に間に合わなくなる(=本当に最遅の出発である)
+    // ことを検証する回帰テスト。手作りの逆向き探索を試した際にここで実データ不整合が
+    // 複数見つかったため、実装を前向き探索ベースに切り替えた経緯がある。
+    function pick<T>(arr: readonly T[], seed: number): T {
+      return arr[seed % arr.length];
+    }
+
+    let seed = 7;
+    const cases: { origin: string; destination: string; arrivalByMinutes: number }[] = [];
+    for (let i = 0; i < 24; i += 1) {
+      seed = (seed * 9301 + 49297) % 233280;
+      const origin = pick(ALL_STATIONS, seed);
+      seed = (seed * 9301 + 49297) % 233280;
+      let destination = pick(ALL_STATIONS, seed);
+      if (destination === origin) destination = pick(ALL_STATIONS, seed + 1);
+      seed = (seed * 9301 + 49297) % 233280;
+      const arrivalByMinutes = 5 * 60 + (seed % (20 * 60));
+      cases.push({ origin, destination, arrivalByMinutes });
+    }
+
+    for (const testCase of cases) {
+      it(`${testCase.origin} → ${testCase.destination}(${testCase.arrivalByMinutes}分までに到着)`, async () => {
+        const byArrival = await findTimedRouteByArrival({ ...testCase, dayType: "weekday" });
+        if (!byArrival) return;
+        expect(byArrival.arrivalMinutes).toBeLessThanOrEqual(testCase.arrivalByMinutes);
+
+        const forward = await findTimedRoute({
+          origin: testCase.origin,
+          destination: testCase.destination,
+          departureMinutes: byArrival.actualDepartureMinutes,
+          dayType: "weekday",
+        });
+        expect(forward?.arrivalMinutes).toBe(byArrival.arrivalMinutes);
+        expect(forward?.legs.map((leg) => `${leg.lineId}:${leg.boardStation}:${leg.alightStation}`)).toEqual(
+          byArrival.legs.map((leg) => `${leg.lineId}:${leg.boardStation}:${leg.alightStation}`),
+        );
+
+        const oneMinuteLater = await findTimedRoute({
+          origin: testCase.origin,
+          destination: testCase.destination,
+          departureMinutes: byArrival.actualDepartureMinutes + 1,
+          dayType: "weekday",
+        });
+        if (oneMinuteLater) {
+          expect(oneMinuteLater.arrivalMinutes).toBeGreaterThan(testCase.arrivalByMinutes);
+        }
+      });
+    }
   });
 });

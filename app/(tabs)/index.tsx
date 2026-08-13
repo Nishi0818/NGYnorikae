@@ -7,6 +7,7 @@ import {
   ALL_STATIONS,
   SUBWAY_LINES,
   TIMETABLE_REVISIONS,
+  findTimedRouteByArrivalOptions,
   findTimedRouteOptions,
   findTransferAlternatives,
   formatMinutes,
@@ -21,6 +22,7 @@ import { loadSearchHistory, mergeSearchHistory, saveSearchHistory, type SearchHi
 
 type StationField = "origin" | "destination";
 type DayMode = "auto" | ServiceDayType;
+type TimeMode = "departure" | "arrival";
 type RouteOptions = Record<RoutePreference, TimedRoute | null>;
 const APP_ICON = require("../../assets/images/icon.png");
 const REDUCED_FONT_WEIGHTS: Partial<Record<string, TextStyle["fontWeight"]>> = { "600": "500", "700": "500", "800": "600" };
@@ -70,11 +72,12 @@ function dayLabel(dayType: ServiceDayType) {
   return dayType === "weekday" ? "平日" : "土休日";
 }
 
-function dateLabel(date: Date | null, time: string) {
-  if (!date) return `${time} 出発`;
+function dateLabel(date: Date | null, time: string, mode: TimeMode) {
+  const suffix = mode === "arrival" ? "到着" : "出発";
+  if (!date) return `${time} ${suffix}`;
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
-  return isToday ? `${time} 出発・きょう` : `${date.getMonth() + 1}/${date.getDate()} ${time} 出発`;
+  return isToday ? `${time} ${suffix}・きょう` : `${date.getMonth() + 1}/${date.getDate()} ${time} ${suffix}`;
 }
 
 /** 名港線は名城線と同じ紫のため、単独表示のときは外側を紫・内側を白の二重丸にして見分けやすくする。 */
@@ -276,6 +279,7 @@ export default function HomeScreen() {
   const [dateText, setDateText] = useState(formatDateInput(initialNow));
   const [timeText, setTimeText] = useState(formatTimeInput(initialNow));
   const [dayMode, setDayMode] = useState<DayMode>("auto");
+  const [timeMode, setTimeMode] = useState<TimeMode>("departure");
   const [pickerField, setPickerField] = useState<StationField | null>(null);
   const [stationQuery, setStationQuery] = useState("");
   const [stationLineFilter, setStationLineFilter] = useState<LineId | "all">("all");
@@ -393,6 +397,7 @@ export default function HomeScreen() {
     setDateText(entry.dateText);
     setTimeText(entry.timeText);
     setDayMode(entry.dayMode);
+    setTimeMode(entry.timeMode ?? "departure");
     setRouteOptions(null);
     setTransferAlternatives([]);
     setShowDetails(false);
@@ -421,21 +426,26 @@ export default function HomeScreen() {
       setError("日付は YYYY-MM-DD 形式で入力してください。");
       return;
     }
-    const departureMinutes = minutesFromTimeText(timeText);
-    if (departureMinutes === null || departureMinutes < 0 || departureMinutes >= 1440) {
-      setError("出発時刻は 00:00〜23:59 で入力してください。");
+    const timeMinutes = minutesFromTimeText(timeText);
+    if (timeMinutes === null || timeMinutes < 0 || timeMinutes >= 1440) {
+      setError(timeMode === "arrival" ? "到着時刻は 00:00〜23:59 で入力してください。" : "出発時刻は 00:00〜23:59 で入力してください。");
       return;
     }
     setIsSearching(true);
     try {
-      const searchParams = { origin, destination, departureMinutes, dayType: serviceDayType };
-      const [nextOptions, nextAlternatives] = await Promise.all([
-        findTimedRouteOptions(searchParams),
-        findTransferAlternatives(searchParams),
-      ]);
+      const nextOptions = timeMode === "arrival"
+        ? await findTimedRouteByArrivalOptions({ origin, destination, arrivalByMinutes: timeMinutes, dayType: serviceDayType })
+        : await findTimedRouteOptions({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
+      const nextAlternatives = timeMode === "arrival"
+        ? []
+        : await findTransferAlternatives({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
       const nextRoute = nextOptions.fastest ?? nextOptions.fewestTransfers;
       if (!nextRoute) {
-        setError("指定時刻以降に利用できる経路が見つかりませんでした。出発条件を変更してください。");
+        setError(
+          timeMode === "arrival"
+            ? "指定時刻までに到着できる経路が見つかりませんでした。到着条件を変更してください。"
+            : "指定時刻以降に利用できる経路が見つかりませんでした。出発条件を変更してください。",
+        );
         return;
       }
       setRouteOptions(nextOptions);
@@ -443,12 +453,13 @@ export default function HomeScreen() {
       setTransferAlternatives(nextAlternatives);
       setAlternativeIndex(0);
       const historyEntry: SearchHistoryEntry = {
-        id: `${origin}::${destination}::${dateText}::${timeText}::${dayMode}`,
+        id: `${origin}::${destination}::${dateText}::${timeText}::${dayMode}::${timeMode}`,
         origin,
         destination,
         dateText,
         timeText,
         dayMode,
+        timeMode,
         savedAt: new Date().toISOString(),
       };
       setSearchHistory((current) => mergeSearchHistory(current, historyEntry));
@@ -524,7 +535,7 @@ export default function HomeScreen() {
           <View style={styles.departureIcon}><Ionicons name="time-outline" size={18} color={COLORS.navy} /></View>
           <View style={styles.departureCopy}>
             <Text style={styles.departureLabel}>出発条件</Text>
-            <Text style={styles.departureValue}>{dateLabel(selectedDate, timeText)} · {dayLabel(serviceDayType)}</Text>
+            <Text style={styles.departureValue}>{dateLabel(selectedDate, timeText, timeMode)} · {dayLabel(serviceDayType)}</Text>
           </View>
           <Text style={styles.changeText}>変更</Text>
           <Ionicons name="chevron-forward" size={17} color={COLORS.lightMuted} />
@@ -542,7 +553,7 @@ export default function HomeScreen() {
                   <View style={styles.historyRouteIcon}><Ionicons name="arrow-forward" size={13} color={COLORS.navy} /></View>
                   <View style={styles.historyCopy}>
                     <Text style={styles.historyRoute}>{entry.origin} <Text style={styles.historyArrow}>→</Text> {entry.destination}</Text>
-                    <Text style={styles.historyMeta}>{entry.timeText} 出発 · {entry.dayMode === "auto" ? "曜日を自動判定" : dayLabel(entry.dayMode)}</Text>
+                    <Text style={styles.historyMeta}>{entry.timeText} {entry.timeMode === "arrival" ? "到着" : "出発"} · {entry.dayMode === "auto" ? "曜日を自動判定" : dayLabel(entry.dayMode)}</Text>
                   </View>
                 </Pressable>
                 <Pressable style={styles.historyDelete} onPress={() => removeHistory(entry.id)} accessibilityRole="button" accessibilityLabel={`${entry.origin}から${entry.destination}の履歴を削除`}>
@@ -638,16 +649,26 @@ export default function HomeScreen() {
       <Modal visible={showOptions} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowOptions(false)}>
         <SafeAreaView style={styles.sheetScreen}>
           <View style={styles.sheetHeader}>
-            <View><Text style={styles.sheetOverline}>検索条件</Text><Text style={styles.sheetTitle}>出発日時</Text></View>
+            <View><Text style={styles.sheetOverline}>検索条件</Text><Text style={styles.sheetTitle}>{timeMode === "arrival" ? "到着日時" : "出発日時"}</Text></View>
             <Pressable style={styles.sheetClose} onPress={() => setShowOptions(false)} accessibilityRole="button" accessibilityLabel="出発条件を閉じる"><Ionicons name="close" size={21} color={COLORS.ink} /></Pressable>
           </View>
           <Pressable style={styles.nowButton} onPress={useNow} accessibilityRole="button"><Ionicons name="locate-outline" size={17} color={COLORS.teal} /><Text style={styles.nowButtonText}>いまの時刻に戻す</Text></Pressable>
+          <View style={styles.optionSection}>
+            <Text style={styles.optionLabel}>時刻の基準</Text>
+            <View style={styles.segmented}>
+              {([ ["departure", "出発時刻で検索"], ["arrival", "到着時刻で検索"] ] as const).map(([value, label]) => (
+                <Pressable key={value} style={[styles.segment, timeMode === value && styles.segmentActive]} onPress={() => setTimeMode(value)}>
+                  <Text style={[styles.segmentText, timeMode === value && styles.segmentTextActive]}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
           <View style={styles.optionSection}>
             <Text style={styles.optionLabel}>日付</Text>
             <View style={styles.optionInput}><Ionicons name="calendar-outline" size={18} color={COLORS.navy} /><TextInput value={dateText} onChangeText={setDateText} placeholder="YYYY-MM-DD" placeholderTextColor={COLORS.lightMuted} style={styles.optionTextInput} keyboardType={Platform.OS === "ios" ? "numbers-and-punctuation" : "default"} /></View>
           </View>
           <View style={styles.optionSection}>
-            <Text style={styles.optionLabel}>時刻</Text>
+            <Text style={styles.optionLabel}>{timeMode === "arrival" ? "到着時刻" : "出発時刻"}</Text>
             <View style={styles.optionInput}><Ionicons name="time-outline" size={18} color={COLORS.navy} /><TextInput value={timeText} onChangeText={setTimeText} placeholder="HH:MM" placeholderTextColor={COLORS.lightMuted} style={styles.optionTextInput} keyboardType={Platform.OS === "ios" ? "numbers-and-punctuation" : "default"} /></View>
           </View>
           <View style={styles.optionSection}>
