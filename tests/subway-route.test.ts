@@ -35,7 +35,7 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
   });
 
   it("名港線の収録時刻表基準日を生成元のメタデータと一致させる", () => {
-    expect(TIMETABLE_REVISIONS.meiko).toBe("2023-01-04");
+    expect(TIMETABLE_REVISIONS.meiko).toBe("2025-09-29");
   });
 
   it("全87駅に読みがなを収録する", () => {
@@ -70,8 +70,8 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
   });
 
   it("駅・路線ペアごとの乗換時間を対称に参照し、未設定値には既定値を使う", () => {
-    expect(getTransferMinutes("金山", "meijo", "meiko")).toBe(2);
-    expect(getTransferMinutes("金山", "meiko", "meijo")).toBe(2);
+    expect(getTransferMinutes("金山", "meijo", "meiko")).toBe(3);
+    expect(getTransferMinutes("金山", "meiko", "meijo")).toBe(3);
     expect(getTransferMinutes("名古屋", "higashiyama", "sakuradori")).toBe(7);
     expect(getTransferMinutes("伏見", "higashiyama", "sakuradori")).toBe(MINIMUM_TRANSFER_MINUTES);
   });
@@ -336,6 +336,29 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
         if (oneMinuteLater) {
           expect(oneMinuteLater.arrivalMinutes).toBeGreaterThan(testCase.arrivalByMinutes);
         }
+      });
+    }
+  });
+
+  describe("終端駅を出発駅とする経路(方向判定の回帰テスト)", () => {
+    // 時刻表生成スクリプトの行き先判定が見出し全体(現在駅名を含む)を対象にしていたため、
+    // 各路線の終端駅(プラス方向の行き先そのものの駅)では「現在駅名」と「行き先キーワード」が
+    // 一致してしまい、唯一存在する実データ(マイナス方向)が誤ってプラス方向のキーとして
+    // 保存されていた。その結果、終端駅を出発駅とする検索が常にnullを返す不具合があった。
+    const terminusCases: { origin: string; destination: string; lineName: string }[] = [
+      { origin: "藤が丘", destination: "本山", lineName: "東山線" },
+      { origin: "名古屋港", destination: "金山", lineName: "名港線" },
+      { origin: "赤池", destination: "八事", lineName: "鶴舞線" },
+      { origin: "徳重", destination: "新瑞橋", lineName: "桜通線" },
+      { origin: "上飯田", destination: "平安通", lineName: "上飯田線" },
+    ];
+
+    for (const { origin, destination, lineName } of terminusCases) {
+      it(`${origin}(終端駅)を出発駅として検索できる`, async () => {
+        const route = await findTimedRoute({ origin, destination, departureMinutes: 8 * 60, dayType: "weekday" });
+        expect(route).not.toBeNull();
+        expect(route?.legs[0]?.lineName).toBe(lineName);
+        expect(route?.legs[0]?.boardStation).toBe(origin);
       });
     }
   });

@@ -28,7 +28,8 @@ function transferConnectionKey(station: string, firstLineId: LineId, secondLineI
  * 考慮した初期値として管理し、後から駅ごとに更新できる構造にしている。
  */
 export const TRANSFER_MINUTES_BY_CONNECTION: Readonly<Record<string, number>> = {
-  [transferConnectionKey("金山", "meijo", "meiko")]: 2,
+  // 金山(名城線⇔名港線)・平安通(上飯田線⇔名城線)はいずれも同一ホームでの対面乗換のため、他より短い3分とする。
+  [transferConnectionKey("金山", "meijo", "meiko")]: 3,
   [transferConnectionKey("平安通", "kamiida", "meijo")]: 3,
   [transferConnectionKey("伏見", "higashiyama", "tsurumai")]: 4,
   [transferConnectionKey("久屋大通", "meijo", "sakuradori")]: 4,

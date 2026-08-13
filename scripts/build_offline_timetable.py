@@ -16,7 +16,7 @@ REPORT_PATH = SOURCE_DIR / 'timetable_build_report.json'
 ARCHIVES = {
     'higashiyama.zip': {'id': 'higashiyama', 'revision': '2025-03-29'},
     'meijo.zip': {'id': 'meijo', 'revision': '2025-09-29'},
-    'meiko.zip': {'id': 'meiko', 'revision': '2023-01-04'},
+    'meiko.zip': {'id': 'meiko', 'revision': '2025-09-29'},
     'tsurumai.zip': {'id': 'tsurumai', 'revision': '2024-03-16'},
     'sakuradori.zip': {'id': 'sakuradori', 'revision': '2023-09-16'},
     'kamiida.zip': {'id': 'kamiida', 'revision': '2024-03-16'},
@@ -42,8 +42,12 @@ def parse_station(header: str) -> str:
 
 
 def infer_direction(line_id: str, header: str) -> int:
+    # 見出しの先頭は「(現在駅)駅」なので、行き先の判定はそれより後ろの文字列だけを見る。
+    # 終着駅(例: 名港線の名古屋港)では現在駅名と行き先方面のキーワードが一致してしまい、
+    # 判定を見出し全体に対して行うと常に positive 方向と誤判定してしまうため。
+    destination_text = header.split('駅', 1)[1] if '駅' in header else header
     if line_id == 'meijo':
-        return 1 if '右回り' in header else -1
+        return 1 if '右回り' in destination_text else -1
     positive_destinations = {
         'higashiyama': ('藤が丘',),
         'meiko': ('名古屋港',),
@@ -51,7 +55,7 @@ def infer_direction(line_id: str, header: str) -> int:
         'sakuradori': ('徳重',),
         'kamiida': ('上飯田', '小牧', '犬山'),
     }
-    return 1 if any(destination in header for destination in positive_destinations[line_id]) else -1
+    return 1 if any(destination in destination_text for destination in positive_destinations[line_id]) else -1
 
 
 def append_block_times(row: tuple[object, ...], hour_index: int, minute_start_index: int, current_hour: int | None, values: list[int]) -> int | None:
