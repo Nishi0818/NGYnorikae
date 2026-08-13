@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text as RNText, TextInput, type TextProps, type TextStyle, View } from "react-native";
 
 import {
@@ -8,16 +8,18 @@ import {
   MINIMUM_TRANSFER_MINUTES,
   SUBWAY_LINES,
   TIMETABLE_REVISIONS,
-  findTimedRoute,
+  findTimedRouteOptions,
   formatMinutes,
   getLineForStation,
   getServiceDayType,
   minutesFromTimeText,
 } from "@/lib/subway/network";
-import type { LineId, ServiceDayType, TimedRoute } from "@/lib/subway/types";
+import type { LineId, RoutePreference, ServiceDayType, TimedRoute } from "@/lib/subway/types";
+import { loadSearchHistory, mergeSearchHistory, saveSearchHistory, type SearchHistoryEntry } from "@/lib/subway/search-history";
 
 type StationField = "origin" | "destination";
 type DayMode = "auto" | ServiceDayType;
+type RouteOptions = Record<RoutePreference, TimedRoute | null>;
 const APP_ICON = require("../../assets/images/icon.png");
 const REDUCED_FONT_WEIGHTS: Partial<Record<string, TextStyle["fontWeight"]>> = { "600": "500", "700": "500", "800": "600" };
 
@@ -83,12 +85,51 @@ function StationMarker({ type, station, preferredLineId }: { type: StationField;
   );
 }
 
-function ResultPanel({ route, detailsOpen, onToggleDetails }: { route: TimedRoute; detailsOpen: boolean; onToggleDetails: () => void }) {
+function ResultPanel({
+  route,
+  routeOptions,
+  preference,
+  onSelectPreference,
+  detailsOpen,
+  onToggleDetails,
+}: {
+  route: TimedRoute;
+  routeOptions: RouteOptions;
+  preference: RoutePreference;
+  onSelectPreference: (preference: RoutePreference) => void;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+}) {
   const destinationLeg = route.legs[route.legs.length - 1];
+  const choices = ([
+    ["fastest", "最短", "到着時刻を優先"],
+    ["fewestTransfers", "乗換少なめ", "乗換回数を優先"],
+  ] as const).filter(([value]) => routeOptions[value]);
 
   return (
     <View style={styles.resultArea}>
-      <Text style={styles.resultOverline}>次に乗る経路</Text>
+      <View style={[styles.routePreferenceGroup, styles.glassPanel]} accessibilityRole="tablist">
+        {choices.map(([value, label, detail]) => {
+          const candidate = routeOptions[value];
+          if (!candidate) return null;
+          const isActive = preference === value;
+          return (
+            <Pressable
+              key={value}
+              style={[styles.routePreferenceButton, isActive && styles.routePreferenceButtonActive]}
+              onPress={() => onSelectPreference(value)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={`${label}、${candidate.totalMinutes}分、${candidate.transferCount === 0 ? "乗換なし" : `乗換${candidate.transferCount}回`}`}
+            >
+              <Text style={[styles.routePreferenceLabel, isActive && styles.routePreferenceLabelActive]}>{label}</Text>
+              <Text style={[styles.routePreferenceMeta, isActive && styles.routePreferenceMetaActive]}>{candidate.totalMinutes}分 · {candidate.transferCount === 0 ? "乗換なし" : `${candidate.transferCount}回`}</Text>
+              <Text style={[styles.routePreferenceHint, isActive && styles.routePreferenceHintActive]}>{detail}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={styles.resultOverline}>{preference === "fastest" ? "最短の経路" : "乗換少なめの経路"}</Text>
       <View style={styles.resultHero}>
         <View>
           <Text style={styles.resultDeparture}>{formatMinutes(route.actualDepartureMinutes)}</Text>
@@ -185,7 +226,10 @@ export default function HomeScreen() {
   const [showOptions, setShowOptions] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showDataInfo, setShowDataInfo] = useState(false);
-  const [route, setRoute] = useState<TimedRoute | null>(null);
+  const [routeOptions, setRouteOptions] = useState<RouteOptions | null>(null);
+  const [routePreference, setRoutePreference] = useState<RoutePreference>("fastest");
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [error, setError] = useState("");
   const [isSearching, setIsSearching] = useState(false);
 
@@ -197,6 +241,16 @@ export default function HomeScreen() {
     return (query ? ALL_STATIONS.filter((station) => station.toLocaleLowerCase("ja").includes(query)) : ALL_STATIONS).slice(0, 32);
   }, [stationQuery]);
   const revisionText = SUBWAY_LINES.map((line) => `${line.name} ${TIMETABLE_REVISIONS[line.id]}`).join(" · ");
+  const route = routeOptions?.[routePreference] ?? routeOptions?.fastest ?? routeOptions?.fewestTransfers ?? null;
+
+  useEffect(() => {
+    setSearchHistory(loadSearchHistory());
+    setHistoryLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (historyLoaded) saveSearchHistory(searchHistory);
+  }, [historyLoaded, searchHistory]);
 
   function openStationPicker(field: StationField) {
     setPickerField(field);
@@ -216,9 +270,24 @@ export default function HomeScreen() {
     setDayMode("auto");
   }
 
+  function applyHistory(entry: SearchHistoryEntry) {
+    setOrigin(entry.origin);
+    setDestination(entry.destination);
+    setDateText(entry.dateText);
+    setTimeText(entry.timeText);
+    setDayMode(entry.dayMode);
+    setRouteOptions(null);
+    setShowDetails(false);
+    setError("");
+  }
+
+  function removeHistory(id: string) {
+    setSearchHistory((current) => current.filter((entry) => entry.id !== id));
+  }
+
   async function runSearch() {
     setError("");
-    setRoute(null);
+    setRouteOptions(null);
     setShowDetails(false);
     if (!origin || !destination) {
       setError("出発駅と到着駅を選択してください。");
@@ -239,12 +308,24 @@ export default function HomeScreen() {
     }
     setIsSearching(true);
     try {
-      const nextRoute = await findTimedRoute({ origin, destination, departureMinutes, dayType: serviceDayType });
+      const nextOptions = await findTimedRouteOptions({ origin, destination, departureMinutes, dayType: serviceDayType });
+      const nextRoute = nextOptions.fastest ?? nextOptions.fewestTransfers;
       if (!nextRoute) {
         setError("指定時刻以降に利用できる経路が見つかりませんでした。出発条件を変更してください。");
         return;
       }
-      setRoute(nextRoute);
+      setRouteOptions(nextOptions);
+      setRoutePreference(nextOptions.fastest ? "fastest" : "fewestTransfers");
+      const historyEntry: SearchHistoryEntry = {
+        id: `${origin}::${destination}::${dateText}::${timeText}::${dayMode}`,
+        origin,
+        destination,
+        dateText,
+        timeText,
+        dayMode,
+        savedAt: new Date().toISOString(),
+      };
+      setSearchHistory((current) => mergeSearchHistory(current, historyEntry));
     } catch {
       setError("時刻表を読み込めませんでした。もう一度お試しください。");
     } finally {
@@ -312,13 +393,36 @@ export default function HomeScreen() {
           <Ionicons name="chevron-forward" size={17} color={COLORS.lightMuted} />
         </Pressable>
 
+        {searchHistory.length > 0 && (
+          <View style={[styles.historyPanel, styles.glassPanel]}>
+            <View style={styles.historyHeader}>
+              <View style={styles.historyTitleWrap}><Ionicons name="time-outline" size={15} color={COLORS.teal} /><Text style={styles.historyTitle}>最近の検索</Text></View>
+              <Text style={styles.historyCaption}>この端末に保存</Text>
+            </View>
+            {searchHistory.map((entry) => (
+              <View key={entry.id} style={styles.historyRow}>
+                <Pressable style={styles.historyEntry} onPress={() => applyHistory(entry)} accessibilityRole="button" accessibilityLabel={`${entry.origin}から${entry.destination}の検索条件を使う`}>
+                  <View style={styles.historyRouteIcon}><Ionicons name="arrow-forward" size={13} color={COLORS.navy} /></View>
+                  <View style={styles.historyCopy}>
+                    <Text style={styles.historyRoute}>{entry.origin} <Text style={styles.historyArrow}>→</Text> {entry.destination}</Text>
+                    <Text style={styles.historyMeta}>{entry.timeText} 出発 · {entry.dayMode === "auto" ? "曜日を自動判定" : dayLabel(entry.dayMode)}</Text>
+                  </View>
+                </Pressable>
+                <Pressable style={styles.historyDelete} onPress={() => removeHistory(entry.id)} accessibilityRole="button" accessibilityLabel={`${entry.origin}から${entry.destination}の履歴を削除`}>
+                  <Ionicons name="close" size={16} color={COLORS.muted} />
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
+
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <Pressable style={[styles.primaryButton, isSearching && styles.primaryButtonLoading]} onPress={runSearch} disabled={isSearching} accessibilityRole="button" accessibilityState={{ busy: isSearching }}>
           {isSearching ? <ActivityIndicator size="small" color="#FFFFFF" /> : <View style={styles.searchIconTile}><Ionicons name="train-outline" size={17} color="#FFFFFF" /></View>}
           <Text style={styles.primaryButtonText}>{isSearching ? "時刻表を読み込み中..." : "次の列車を探す"}</Text>
         </Pressable>
 
-        {route ? <ResultPanel route={route} detailsOpen={showDetails} onToggleDetails={() => setShowDetails((value) => !value)} /> : (
+        {route && routeOptions ? <ResultPanel route={route} routeOptions={routeOptions} preference={routePreference} onSelectPreference={(value) => { setRoutePreference(value); setShowDetails(false); }} detailsOpen={showDetails} onToggleDetails={() => setShowDetails((value) => !value)} /> : (
           <View style={[styles.emptyHint, styles.glassPanel]}>
             <Ionicons name="train-outline" size={22} color={COLORS.teal} />
             <View style={styles.emptyHintCopy}>
@@ -399,10 +503,10 @@ const styles = StyleSheet.create({
   topBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, brandLockup: { flexDirection: "row", alignItems: "center", gap: 8 }, brandMark: { width: 34, height: 34, borderRadius: 11, overflow: "hidden", borderWidth: 1, borderColor: "rgba(18,117,187,0.28)", shadowColor: "#1B75BB", shadowOpacity: 0.16, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, brandIcon: { width: "100%", height: "100%" }, brandName: { color: COLORS.ink, fontWeight: "800", fontSize: 14 }, offlineStatus: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.72)", borderWidth: 1, borderColor: "rgba(18,117,187,0.12)" }, offlineText: { color: COLORS.muted, fontSize: 11, fontWeight: "800" },
   intro: { marginTop: 30, marginBottom: 22 }, introEyebrow: { color: COLORS.teal, fontSize: 13, fontWeight: "800" }, introTitle: { color: COLORS.ink, fontSize: 31, lineHeight: 39, fontWeight: "800", marginTop: 4, letterSpacing: -0.6 }, introHint: { color: COLORS.muted, fontSize: 13, lineHeight: 19, marginTop: 7 },
   glassPanel: { backgroundColor: "rgba(255,255,255,0.82)", borderColor: "rgba(18,117,187,0.16)", shadowColor: "#1B75BB", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, routeCard: { position: "relative", borderWidth: 1, borderColor: COLORS.border, borderRadius: 18, backgroundColor: COLORS.surface, padding: 10 }, routeFields: { gap: 0 }, routeField: { minHeight: 60, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 7 }, routeFieldCopy: { flex: 1 }, routeLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, routeValue: { color: COLORS.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }, routePlaceholder: { color: COLORS.lightMuted, fontWeight: "600" }, marker: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border }, originMarker: { backgroundColor: COLORS.surface }, destinationMarker: { backgroundColor: COLORS.surface }, routeConnectorRow: { height: 8, paddingLeft: 21 }, routeConnector: { height: 8, borderLeftWidth: 2, borderLeftColor: "rgba(18,117,187,0.16)" }, swapButton: { position: "absolute", right: 15, top: 47, width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.92)", borderWidth: 1, borderColor: "rgba(18,117,187,0.18)" },
-  departureRow: { marginTop: 13, minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 13, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, departureIcon: { width: 31, height: 31, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(31,150,210,0.11)", borderWidth: 1, borderColor: "rgba(31,150,210,0.18)" }, departureCopy: { flex: 1 }, departureLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, departureValue: { color: COLORS.ink, fontSize: 14, fontWeight: "800", marginTop: 2 }, changeText: { color: COLORS.blue, fontSize: 12, fontWeight: "800" },
+  departureRow: { marginTop: 13, minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 13, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, departureIcon: { width: 31, height: 31, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(31,150,210,0.11)", borderWidth: 1, borderColor: "rgba(31,150,210,0.18)" }, departureCopy: { flex: 1 }, departureLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, departureValue: { color: COLORS.ink, fontSize: 14, fontWeight: "800", marginTop: 2 }, changeText: { color: COLORS.blue, fontSize: 12, fontWeight: "800" }, historyPanel: { marginTop: 13, borderRadius: 16, padding: 10 }, historyHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, paddingBottom: 6 }, historyTitleWrap: { flexDirection: "row", alignItems: "center", gap: 6 }, historyTitle: { color: COLORS.ink, fontSize: 12, fontWeight: "800" }, historyCaption: { color: COLORS.muted, fontSize: 10 }, historyRow: { minHeight: 48, flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "rgba(18,117,187,0.09)" }, historyEntry: { flex: 1, minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 4 }, historyRouteIcon: { width: 24, height: 24, alignItems: "center", justifyContent: "center", borderRadius: 8, backgroundColor: "rgba(11,91,149,0.08)" }, historyCopy: { flex: 1 }, historyRoute: { color: COLORS.ink, fontSize: 13, fontWeight: "700" }, historyArrow: { color: COLORS.teal }, historyMeta: { color: COLORS.muted, fontSize: 10, marginTop: 1 }, historyDelete: { width: 34, height: 34, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   errorText: { color: COLORS.danger, marginTop: 12, fontSize: 12, fontWeight: "700" }, primaryButton: { minHeight: 56, borderRadius: 15, marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, backgroundColor: COLORS.navy, shadowColor: "#1B75BB", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3 }, primaryButtonLoading: { opacity: 0.78 }, searchIconTile: { width: 28, height: 28, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#1B75BB", borderWidth: 1, borderColor: "rgba(245,196,0,0.72)" }, primaryButtonText: { color: COLORS.surface, fontSize: 16, fontWeight: "800" },
   emptyHint: { marginTop: 24, flexDirection: "row", gap: 12, padding: 15, borderRadius: 17, backgroundColor: COLORS.paleTeal }, emptyHintCopy: { flex: 1 }, emptyHintTitle: { color: COLORS.ink, fontSize: 13, fontWeight: "800", lineHeight: 19 }, emptyHintText: { color: COLORS.muted, fontSize: 12, lineHeight: 18, marginTop: 3 },
-  resultArea: { marginTop: 28 }, resultOverline: { color: "#5E5144", fontSize: 12, fontWeight: "800", marginBottom: 9 }, resultHero: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, resultDeparture: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", letterSpacing: -0.7 }, resultArrival: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", textAlign: "right", letterSpacing: -0.7 }, resultPlace: { color: COLORS.muted, fontSize: 13, fontWeight: "700", marginTop: 3 }, resultArrowWrap: { alignItems: "center", gap: 1 }, resultDuration: { color: COLORS.navy, fontSize: 13, fontWeight: "800" }, resultTransfer: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, resultArrivalWrap: { alignItems: "flex-end" }, routeSteps: { marginTop: 18, gap: 8 }, routeLegSummary: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, routeLegColor: { width: 4, alignSelf: "stretch", borderRadius: 3 }, routeLegCopy: { flex: 1 }, routeLegHeading: { flexDirection: "row", alignItems: "center", gap: 8 }, linePill: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 }, linePillText: { fontSize: 11, fontWeight: "800" }, routeLegDirection: { flex: 1, color: COLORS.ink, fontSize: 14, fontWeight: "800" }, routeLegMeta: { color: COLORS.muted, fontSize: 11, marginTop: 5 }, routeTransferSummary: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderLeftWidth: 1, borderRightWidth: 1, borderColor: COLORS.border }, routeTransferText: { flex: 1, color: COLORS.muted, fontSize: 11, fontWeight: "700" }, detailToggle: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginTop: 8 }, detailToggleText: { color: COLORS.navy, fontSize: 13, fontWeight: "800" },
+  resultArea: { marginTop: 28 }, routePreferenceGroup: { flexDirection: "row", padding: 3, borderRadius: 16, marginBottom: 15 }, routePreferenceButton: { flex: 1, minHeight: 72, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, borderRadius: 13 }, routePreferenceButtonActive: { backgroundColor: "rgba(11,91,149,0.09)", borderWidth: 1, borderColor: "rgba(11,91,149,0.24)" }, routePreferenceLabel: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, routePreferenceLabelActive: { color: COLORS.navy }, routePreferenceMeta: { color: COLORS.ink, fontSize: 12, fontWeight: "700", marginTop: 2 }, routePreferenceMetaActive: { color: COLORS.navy }, routePreferenceHint: { color: COLORS.muted, fontSize: 9, marginTop: 2 }, routePreferenceHintActive: { color: COLORS.teal }, resultOverline: { color: "#5E5144", fontSize: 12, fontWeight: "800", marginBottom: 9 }, resultHero: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, resultDeparture: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", letterSpacing: -0.7 }, resultArrival: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", textAlign: "right", letterSpacing: -0.7 }, resultPlace: { color: COLORS.muted, fontSize: 13, fontWeight: "700", marginTop: 3 }, resultArrowWrap: { alignItems: "center", gap: 1 }, resultDuration: { color: COLORS.navy, fontSize: 13, fontWeight: "800" }, resultTransfer: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, resultArrivalWrap: { alignItems: "flex-end" }, routeSteps: { marginTop: 18, gap: 8 }, routeLegSummary: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, routeLegColor: { width: 4, alignSelf: "stretch", borderRadius: 3 }, routeLegCopy: { flex: 1 }, routeLegHeading: { flexDirection: "row", alignItems: "center", gap: 8 }, linePill: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 }, linePillText: { fontSize: 11, fontWeight: "800" }, routeLegDirection: { flex: 1, color: COLORS.ink, fontSize: 14, fontWeight: "800" }, routeLegMeta: { color: COLORS.muted, fontSize: 11, marginTop: 5 }, routeTransferSummary: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderLeftWidth: 1, borderRightWidth: 1, borderColor: COLORS.border }, routeTransferText: { flex: 1, color: COLORS.muted, fontSize: 11, fontWeight: "700" }, detailToggle: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginTop: 8 }, detailToggleText: { color: COLORS.navy, fontSize: 13, fontWeight: "800" },
   detailList: { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 12 }, detailLeg: { flexDirection: "row", minHeight: 72, gap: 9 }, detailLine: { width: 4, borderRadius: 2 }, detailTimes: { justifyContent: "space-between", paddingVertical: 1 }, detailTime: { color: COLORS.ink, fontSize: 13, fontWeight: "800" }, detailCopy: { flex: 1, justifyContent: "space-between", paddingBottom: 2 }, detailStation: { color: COLORS.ink, fontSize: 14, fontWeight: "800" }, detailDirection: { color: COLORS.muted, fontSize: 11 }, detailTransfer: { flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 8 }, detailConnector: { width: 4, height: 14, borderRadius: 2, backgroundColor: COLORS.amber }, detailTransferText: { color: "#81510D", fontSize: 11, fontWeight: "700" }, detailFooter: { marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: COLORS.border, flexDirection: "row", justifyContent: "space-between" }, detailFooterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   dataRow: { marginTop: 27, minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 }, dataRowText: { flex: 1, color: COLORS.muted, fontSize: 12, fontWeight: "700" }, dataDetail: { paddingTop: 3, paddingBottom: 3 }, dataDetailText: { color: COLORS.muted, fontSize: 11, lineHeight: 17 }, dataRevisionText: { color: COLORS.navy, fontSize: 10, lineHeight: 15, marginVertical: 8, fontWeight: "700" },
   sheetScreen: { flex: 1, backgroundColor: COLORS.canvas }, sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 17, backgroundColor: COLORS.surface }, sheetOverline: { color: COLORS.teal, fontSize: 11, fontWeight: "800" }, sheetTitle: { color: COLORS.ink, fontSize: 24, fontWeight: "800", marginTop: 3 }, sheetClose: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.elevated }, stationSearch: { margin: 16, minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderRadius: 15, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, stationSearchInput: { flex: 1, color: COLORS.ink, fontSize: 15, paddingVertical: 9 }, stationCount: { color: COLORS.muted, marginHorizontal: 20, marginBottom: 7, fontSize: 12 }, stationList: { paddingHorizontal: 16, paddingBottom: 28 }, stationOption: { minHeight: 55, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border }, stationOptionDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.teal }, stationOptionText: { flex: 1, color: COLORS.ink, fontSize: 16, fontWeight: "700" }, emptyStationText: { color: COLORS.muted, textAlign: "center", padding: 30 },

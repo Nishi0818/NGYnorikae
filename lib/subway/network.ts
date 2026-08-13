@@ -1,5 +1,5 @@
 import { TIMETABLE_REVISIONS, type OfflineTimetables } from "./timetable-meta";
-import type { LineId, RouteLeg, ServiceDayType, SubwayLine, TimedRoute } from "./types";
+import type { LineId, RouteLeg, RoutePreference, ServiceDayType, SubwayLine, TimedRoute } from "./types";
 
 export { TIMETABLE_REVISIONS };
 
@@ -178,6 +178,30 @@ type SearchState = {
   legs: RouteLeg[];
 };
 
+type SearchScore = {
+  arrivalMinutes: number;
+  transferCount: number;
+};
+
+function transferCountForLegs(legs: readonly RouteLeg[]) {
+  return legs.slice(1).filter((leg, index) => leg.lineId !== legs[index]?.lineId).length;
+}
+
+function scoreForState(state: SearchState): SearchScore {
+  return { arrivalMinutes: state.arrivalMinutes, transferCount: transferCountForLegs(state.legs) };
+}
+
+/**
+ * 最短は到着時刻を、乗換少なめは乗換回数を第一基準にする。両者の同点はもう一方の値で解消し、
+ * 結果を常に決定的にする。
+ */
+function compareScores(left: SearchScore, right: SearchScore, preference: RoutePreference) {
+  if (preference === "fewestTransfers") {
+    return left.transferCount - right.transferCount || left.arrivalMinutes - right.arrivalMinutes;
+  }
+  return left.arrivalMinutes - right.arrivalMinutes || left.transferCount - right.transferCount;
+}
+
 function possibleAlightStations(line: SubwayLine, station: string, direction: 1 | -1) {
   const startIndex = line.stations.indexOf(station);
   if (startIndex < 0) return [];
@@ -208,11 +232,13 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
   destination,
   departureMinutes,
   dayType,
+  preference = "fastest",
 }: {
   origin: string;
   destination: string;
   departureMinutes: number;
   dayType: ServiceDayType;
+  preference?: RoutePreference;
 }): TimedRoute | null {
   if (!origin || !destination || origin === destination || !linesByStation.has(origin) || !linesByStation.has(destination)) {
     return null;
@@ -220,14 +246,14 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
 
   const initial: SearchState = { station: origin, lineId: null, arrivalMinutes: departureMinutes, legs: [] };
   const queue: SearchState[] = [initial];
-  const bestArrival = new Map<string, number>([[stateKey(origin, null), departureMinutes]]);
+  const bestScore = new Map<string, SearchScore>([[stateKey(origin, null), scoreForState(initial)]]);
   let bestResult: SearchState | null = null;
 
   while (queue.length > 0) {
-    queue.sort((a, b) => a.arrivalMinutes - b.arrivalMinutes);
+    queue.sort((a, b) => compareScores(scoreForState(a), scoreForState(b), preference));
     const current = queue.shift();
     if (!current) break;
-    if (bestResult && current.arrivalMinutes >= bestResult.arrivalMinutes) continue;
+    if (bestResult && compareScores(scoreForState(current), scoreForState(bestResult), preference) >= 0) continue;
     if (current.station === destination && current.legs.length > 0) {
       bestResult = current;
       continue;
@@ -259,10 +285,12 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
             distanceKm: target.distanceKm,
           };
           const key = stateKey(target.station, candidateLine.id);
-          const knownArrival = bestArrival.get(key);
-          if (knownArrival !== undefined && knownArrival <= arrival) continue;
-          bestArrival.set(key, arrival);
-          queue.push({ station: target.station, lineId: candidateLine.id, arrivalMinutes: arrival, legs: [...current.legs, leg] });
+          const nextState: SearchState = { station: target.station, lineId: candidateLine.id, arrivalMinutes: arrival, legs: [...current.legs, leg] };
+          const nextScore = scoreForState(nextState);
+          const knownScore = bestScore.get(key);
+          if (knownScore && compareScores(knownScore, nextScore, preference) <= 0) continue;
+          bestScore.set(key, nextScore);
+          queue.push(nextState);
         }
       }
     }
@@ -270,7 +298,7 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
 
   if (!bestResult) return null;
   const distanceKm = bestResult.legs.reduce((total, leg) => total + leg.distanceKm, 0);
-  const transferCount = bestResult.legs.slice(1).filter((leg, index) => leg.lineId !== bestResult?.legs[index].lineId).length;
+  const transferCount = transferCountForLegs(bestResult.legs);
   return {
     origin,
     destination,
@@ -290,11 +318,26 @@ export async function findTimedRoute(params: {
   destination: string;
   departureMinutes: number;
   dayType: ServiceDayType;
+  preference?: RoutePreference;
 }): Promise<TimedRoute | null> {
   if (!params.origin || !params.destination || params.origin === params.destination || !linesByStation.has(params.origin) || !linesByStation.has(params.destination)) {
     return null;
   }
   return findTimedRouteFromTimetables(await loadOfflineTimetables(), params);
+}
+
+/** 同一条件で「最短」と「乗換少なめ」を並べて提示するための経路ペア。 */
+export async function findTimedRouteOptions(params: {
+  origin: string;
+  destination: string;
+  departureMinutes: number;
+  dayType: ServiceDayType;
+}): Promise<Record<RoutePreference, TimedRoute | null>> {
+  const timetables = await loadOfflineTimetables();
+  return {
+    fastest: findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" }),
+    fewestTransfers: findTimedRouteFromTimetables(timetables, { ...params, preference: "fewestTransfers" }),
+  };
 }
 
 export function getLine(lineId: LineId) {

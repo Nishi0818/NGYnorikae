@@ -4,6 +4,7 @@ import {
   ALL_STATIONS,
   MINIMUM_TRANSFER_MINUTES,
   findTimedRoute,
+  findTimedRouteOptions,
   getLineForStation,
   getTransferMinutes,
   getServiceDayType,
@@ -94,6 +95,19 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     expect(route?.legs).toHaveLength(2);
     expect(route?.legs[0]).toMatchObject({ lineName: "東山線", alightStation: "伏見" });
     expect(route?.legs[1]).toMatchObject({ lineName: "鶴舞線", boardStation: "伏見", alightStation: "丸の内" });
+  });
+
+  it("最短と乗換少なめの比較結果を同一条件で返し、乗換少なめは乗換回数を増やさない", async () => {
+    const options = await findTimedRouteOptions({
+      origin: "一社",
+      destination: "丸の内",
+      departureMinutes: 10 * 60 + 9,
+      dayType: "weekday",
+    });
+
+    expect(options.fastest).not.toBeNull();
+    expect(options.fewestTransfers).not.toBeNull();
+    expect(options.fewestTransfers?.transferCount).toBeLessThanOrEqual(options.fastest?.transferCount ?? Infinity);
   });
 
   it("対象外の駅が指定された場合は、誤った候補を返さない", async () => {

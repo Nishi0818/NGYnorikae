@@ -1,5 +1,8 @@
 export type ServiceDayType = "weekday" | "holiday";
 
+/** 経路結果を並べる基準。最短は到着時刻、乗換少なめは乗換回数を優先する。 */
+export type RoutePreference = "fastest" | "fewestTransfers";
+
 export type LineId =
   | "higashiyama"
   | "meijo"
