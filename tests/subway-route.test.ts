@@ -6,17 +6,30 @@ import {
   findTimedRoute,
   findTimedRouteOptions,
   getLineForStation,
+  getStationsForLine,
   getTransferMinutes,
   getServiceDayType,
 } from "../lib/subway/network";
+import { TIMETABLE_REVISIONS } from "../lib/subway/timetable-meta";
 
 describe("名古屋市営地下鉄オフライン経路探索", () => {
   it("全6路線の駅を検索候補として収録する", () => {
+    expect(ALL_STATIONS).toHaveLength(87);
     expect(ALL_STATIONS).toContain("高畑");
     expect(ALL_STATIONS).toContain("名古屋港");
     expect(ALL_STATIONS).toContain("赤池");
     expect(ALL_STATIONS).toContain("徳重");
     expect(ALL_STATIONS).toContain("上飯田");
+  });
+
+  it("路線別の駅選択では、該当路線だけを路線順に返す", () => {
+    expect(getStationsForLine("meiko")).toEqual(["金山", "日比野", "六番町", "東海通", "港区役所", "築地口", "名古屋港"]);
+    expect(getStationsForLine("kamiida")).toEqual(["平安通", "上飯田"]);
+    expect(getStationsForLine("all")).toHaveLength(87);
+  });
+
+  it("名港線の収録時刻表基準日を生成元のメタデータと一致させる", () => {
+    expect(TIMETABLE_REVISIONS.meiko).toBe("2023-01-04");
   });
 
   it("曜日から平日・土休日の時刻表区分を判定する", () => {

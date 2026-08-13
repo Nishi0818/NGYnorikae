@@ -121,6 +121,11 @@ for (const line of SUBWAY_LINES) {
   }
 }
 
+/** 駅選択で使う、指定路線の駅一覧。全路線指定時は五十音順の全駅を返す。 */
+export function getStationsForLine(lineId: LineId | "all") {
+  return lineId === "all" ? ALL_STATIONS : lineById.get(lineId)?.stations ?? [];
+}
+
 function timetableKey(lineId: LineId, station: string, direction: 1 | -1) {
   return `${lineId}|${station}|${direction}`;
 }
@@ -208,7 +213,7 @@ function possibleAlightStations(line: SubwayLine, station: string, direction: 1 
   const options: { station: string; rideMinutes: number; distanceKm: number }[] = [];
   let rideMinutes = 0;
   let distanceKm = 0;
-  const maximumStops = line.loop ? line.stations.length - 1 : line.stations.length - 1;
+  const maximumStops = line.stations.length - 1;
   for (let offset = 1; offset <= maximumStops; offset += 1) {
     const rawSegmentIndex = direction === 1 ? startIndex + offset - 1 : startIndex - offset;
     if (!line.loop && (rawSegmentIndex < 0 || rawSegmentIndex >= line.distances.length)) break;

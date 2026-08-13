@@ -17,3 +17,5 @@
 - 2026-08-13: GitHubのデプロイ記録で、Vercelがコミット `9264c33` のデプロイを成功として完了したことを確認した。生成先は `nagoya-subway-losuwszjs-ni3.vercel.app` だが、外部ブラウザからはVercelログイン要求となり、既存の `nagoya-subway.vercel.app` には旧Vite版が残っている。Vercel側での本番エイリアス状態を確認する必要がある。
 - 2026-08-13: 最短／乗換少なめの比較とブラウザ端末内の検索履歴を追加した。型検査、経路探索10件、履歴処理2件のテスト、およびVercelと同一の静的ウェブビルドが成功した。
 - 2026-08-13: コミット `e88f37d` をGitHubのmainへ反映し、Vercelデプロイ成功を確認した。正式URL `https://nagoya-subway.vercel.app` はNAGOYA SUBWAYの最新検索ホームを配信している。
+- 2026-08-13: キャッシュ更新コミット `de51e88` のVercelデプロイについて、Deployment画面で Ready / Latest、Production / Current、正式ドメイン `nagoya-subway.vercel.app` を確認した。個別デプロイURL `nagoya-subway-2ydo9nw3q-ni3.vercel.app` は同コミットの識別用URLである。
+- 2026-08-13: コードレビューの3件を修正した。駅選択の32件上限を除去し、名港線の基準日を生成元どおり2023-01-04へ修正、経路探索の重複条件式を単純化した。型検査、経路探索11件、履歴処理2件、静的ウェブビルドが成功した。

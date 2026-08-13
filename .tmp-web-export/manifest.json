@@ -1,0 +1,19 @@
+{
+  "name": "なごや地下鉄オフライン案内",
+  "short_name": "地下鉄案内",
+  "description": "名古屋市営地下鉄の時刻表と乗換時間を考慮するオフライン乗換案内",
+  "lang": "ja",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#F5F7F8",
+  "theme_color": "#153A5B",
+  "icons": [
+    {
+      "src": "/assets/images/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
