@@ -46,7 +46,7 @@ const COLORS = {
   danger: "#B33A2B",
 } as const;
 
-function Text({ style, ...props }: TextProps) {
+function Text({ style, ...props }: TextProps & { suppressHydrationWarning?: boolean }) {
   const originalWeight = StyleSheet.flatten(style)?.fontWeight;
   const reducedWeight = REDUCED_FONT_WEIGHTS[String(originalWeight)];
 
@@ -553,7 +553,8 @@ export default function HomeScreen() {
           <View style={styles.departureIcon}><Ionicons name="time-outline" size={18} color={COLORS.navy} /></View>
           <View style={styles.departureCopy}>
             <Text style={styles.departureLabel}>検索条件</Text>
-            <Text style={styles.departureValue}>{dateLabel(selectedDate, timeText, timeMode)} · {dayLabel(serviceDayType)}</Text>
+            {/* 静的書き出し(ビルド時刻)とハイドレーション時(閲覧時刻)で内容が食い違うのは意図通りのため、警告を抑止する。 */}
+            <Text suppressHydrationWarning style={styles.departureValue}>{dateLabel(selectedDate, timeText, timeMode)} · {dayLabel(serviceDayType)}</Text>
           </View>
           <Text style={styles.changeText}>変更</Text>
           <Ionicons name="chevron-forward" size={17} color={COLORS.lightMuted} />
