@@ -23,4 +23,4 @@
 - [x] 出発時刻検索で最短経路の探索が二重に走っていた無駄を解消する(findDepartureRouteResultsに統合)
 - [x] 祝日の振替休日判定がタイムゾーン依存だった不具合を修正する(UTC解釈されるDate文字列パースをやめる)
 - [ ] 未使用の足場コード(tRPC/oauth/drizzle/manus-runtime、約1000行超)の削除を検討する(影響範囲が広いため未着手)
-- [ ] 既存デプロイでも発生しているReact hydrationエラー(Minified React error #418)の原因調査(レビュー中に発見、機能への実害は未確認)
+- [x] React hydrationエラー(Minified React error #418)の原因調査・修正(ビルド時刻とハイドレーション時刻のズレによる「検索条件」欄の時刻表示不一致。suppressHydrationWarningで対処)
