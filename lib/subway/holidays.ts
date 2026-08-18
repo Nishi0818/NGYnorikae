@@ -19,6 +19,17 @@ function formatDateKey(date: Date): string {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 }
 
+/**
+ * `formatDateKey` で作った "YYYY-MM-DD" 文字列をローカル時刻の日付として復元する。
+ * `new Date("YYYY-MM-DD")` はJS仕様上UTCとして解釈されるため、UTCより遅れたタイムゾーン
+ * (例: 米大陸)からのアクセスでは曜日が1日ずれることがある。本アプリは公開Webアプリで
+ * 利用者のタイムゾーンを問わないため、年月日の数値からローカル時刻で組み立てる。
+ */
+function parseDateKey(dateKey: string): Date {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 /** 指定月の第n月曜日の日付(1〜31)を返す。 */
 function nthMonday(year: number, month: number, n: number): number {
   const first = new Date(year, month - 1, 1);
@@ -64,7 +75,7 @@ function computeHolidaysForYear(year: number): Map<string, string> {
   // 振替休日: 祝日が日曜のとき、直後の「祝日でない日」を休日にする。
   const withSubstitutes = new Map(base);
   for (const [dateKey, ] of base) {
-    const date = new Date(dateKey);
+    const date = parseDateKey(dateKey);
     if (date.getDay() !== 0) continue;
     const substitute = new Date(date);
     do {

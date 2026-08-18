@@ -591,13 +591,18 @@ function sameTransferStations(a: ReadonlySet<string>, b: ReadonlySet<string>) {
  * 最速経路が使う乗換駅を除外して再探索し、別の乗換駅を通る経路が見つかれば
  * 到着時刻順に最大2件を返す。直通・代替が見つからない場合は1件のみ返す。
  */
-function findTransferAlternativesFromTimetables(timetables: OfflineTimetables, params: {
-  origin: string;
-  destination: string;
-  departureMinutes: number;
-  dayType: ServiceDayType;
-}): TimedRoute[] {
-  const primary = findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" });
+function findTransferAlternativesFromTimetables(
+  timetables: OfflineTimetables,
+  params: {
+    origin: string;
+    destination: string;
+    departureMinutes: number;
+    dayType: ServiceDayType;
+  },
+  // 呼び出し元(findDepartureRouteResults)がすでに「最短」を探索済みなら渡してもらい、
+  // 同じ探索をもう一度走らせないようにする。単独呼び出し(findTransferAlternatives)では省略時に自前で探索する。
+  primary: TimedRoute | null = findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" }),
+): TimedRoute[] {
   if (!primary || primary.legs.length <= 1) return primary ? [primary] : [];
 
   const usedTransferStations = transferStationsOf(primary);
@@ -620,6 +625,32 @@ export async function findTransferAlternatives(params: {
     return [];
   }
   return findTransferAlternativesFromTimetables(await loadOfflineTimetables(), params);
+}
+
+/**
+ * 出発時刻検索の画面表示に必要な「最短」「乗換少なめ」「乗換駅違いの代替」を1回の呼び出しでまとめて求める。
+ * `findTimedRouteOptions` と `findTransferAlternatives` を個別に呼ぶと「最短」経路の探索が二重に走ってしまうため、
+ * ここで最短探索の結果を使い回して無駄な探索を減らす。
+ */
+export async function findDepartureRouteResults(params: {
+  origin: string;
+  destination: string;
+  departureMinutes: number;
+  dayType: ServiceDayType;
+}): Promise<{ options: Record<RoutePreference, TimedRoute | null>; transferAlternatives: TimedRoute[] }> {
+  if (!params.origin || !params.destination || params.origin === params.destination || !linesByStation.has(params.origin) || !linesByStation.has(params.destination)) {
+    return { options: { fastest: null, fewestTransfers: null }, transferAlternatives: [] };
+  }
+  const timetables = await loadOfflineTimetables();
+  const fastest = findTimedRouteFromTimetables(timetables, { ...params, preference: "fastest" });
+  const fewestTransfers = findTimedRouteFromTimetables(timetables, { ...params, preference: "fewestTransfers" });
+  const transferAlternatives = findTransferAlternativesFromTimetables(timetables, params, fastest);
+  return { options: { fastest, fewestTransfers }, transferAlternatives };
+}
+
+/** 起動直後にアイドル時間で時刻表本体を先読みし、初回検索時に通信できない場合でも失敗しないようにする。 */
+export function preloadOfflineTimetables(): void {
+  void loadOfflineTimetables();
 }
 
 export function getLine(lineId: LineId) {

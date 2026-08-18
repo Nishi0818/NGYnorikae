@@ -7,9 +7,8 @@ import {
   ALL_STATIONS,
   SUBWAY_LINES,
   TIMETABLE_REVISIONS,
+  findDepartureRouteResults,
   findTimedRouteByArrivalOptions,
-  findTimedRouteOptions,
-  findTransferAlternatives,
   formatMinutes,
   getLinesForStation,
   getStationsForLine,
@@ -17,6 +16,7 @@ import {
   japaneseHolidayName,
   matchesStationQuery,
   minutesFromTimeText,
+  preloadOfflineTimetables,
 } from "@/lib/subway/network";
 import type { LineId, RoutePreference, ServiceDayType, SubwayLine, TimedRoute } from "@/lib/subway/types";
 import { loadSearchHistory, mergeSearchHistory, saveSearchHistory, type SearchHistoryEntry } from "@/lib/subway/search-history";
@@ -325,6 +325,18 @@ export default function HomeScreen() {
     setHistoryLoaded(true);
   }, []);
 
+  // 初回表示を邪魔しないよう、アイドル時間に時刻表本体を先読みしておく。
+  // これにより「開いた直後に通信できなくなった」場合でも検索が失敗しない。
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const scheduleIdle = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+      ?? ((cb: () => void) => window.setTimeout(cb, 300));
+    const cancelIdle = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback
+      ?? window.clearTimeout;
+    const id = scheduleIdle(preloadOfflineTimetables);
+    return () => cancelIdle(id);
+  }, []);
+
   useEffect(() => {
     if (historyLoaded) saveSearchHistory(searchHistory);
   }, [historyLoaded, searchHistory]);
@@ -435,12 +447,16 @@ export default function HomeScreen() {
     }
     setIsSearching(true);
     try {
-      const nextOptions = timeMode === "arrival"
-        ? await findTimedRouteByArrivalOptions({ origin, destination, arrivalByMinutes: timeMinutes, dayType: serviceDayType })
-        : await findTimedRouteOptions({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
-      const nextAlternatives = timeMode === "arrival"
-        ? []
-        : await findTransferAlternatives({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
+      let nextOptions: RouteOptions;
+      let nextAlternatives: TimedRoute[];
+      if (timeMode === "arrival") {
+        nextOptions = await findTimedRouteByArrivalOptions({ origin, destination, arrivalByMinutes: timeMinutes, dayType: serviceDayType });
+        nextAlternatives = [];
+      } else {
+        const results = await findDepartureRouteResults({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
+        nextOptions = results.options;
+        nextAlternatives = results.transferAlternatives;
+      }
       const nextRoute = nextOptions.fastest ?? nextOptions.fewestTransfers;
       if (!nextRoute) {
         setError(
