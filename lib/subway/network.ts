@@ -497,7 +497,7 @@ function findTimedRouteByArrivalFromTimetables(timetables: OfflineTimetables, {
   arrivalByMinutes: number;
   dayType: ServiceDayType;
   preference?: RoutePreference;
-}): TimedRoute | null {
+}, excludedTransferStations?: ReadonlySet<string>): TimedRoute | null {
   if (!origin || !destination || origin === destination || !linesByStation.has(origin) || !linesByStation.has(destination)) {
     return null;
   }
@@ -505,7 +505,7 @@ function findTimedRouteByArrivalFromTimetables(timetables: OfflineTimetables, {
   const candidates = collectDepartureCandidates(timetables, origin, dayType).filter((time) => time <= arrivalByMinutes);
   let best: TimedRoute | null = null;
   for (const departureMinutes of candidates) {
-    const route = findTimedRouteFromTimetables(timetables, { origin, destination, departureMinutes, dayType, preference });
+    const route = findTimedRouteFromTimetables(timetables, { origin, destination, departureMinutes, dayType, preference }, excludedTransferStations);
     if (!route || route.arrivalMinutes > arrivalByMinutes) continue;
     if (!best) {
       best = route;
@@ -578,6 +578,26 @@ export async function findTimedRouteByArrivalOptions(params: {
   };
 }
 
+/**
+ * 到着時刻検索の画面表示に必要な「最短」「乗換少なめ」「乗換駅違いの代替」を1回の呼び出しでまとめて求める。
+ * `findDepartureRouteResults` の到着時刻版。ここでも「最短」の探索結果を使い回し、二重探索を避ける。
+ */
+export async function findArrivalRouteResults(params: {
+  origin: string;
+  destination: string;
+  arrivalByMinutes: number;
+  dayType: ServiceDayType;
+}): Promise<{ options: Record<RoutePreference, TimedRoute | null>; transferAlternatives: TimedRoute[] }> {
+  if (!params.origin || !params.destination || params.origin === params.destination || !linesByStation.has(params.origin) || !linesByStation.has(params.destination)) {
+    return { options: { fastest: null, fewestTransfers: null }, transferAlternatives: [] };
+  }
+  const timetables = await loadOfflineTimetables();
+  const fastest = findTimedRouteByArrivalFromTimetables(timetables, { ...params, preference: "fastest" });
+  const fewestTransfers = findTimedRouteByArrivalFromTimetables(timetables, { ...params, preference: "fewestTransfers" });
+  const transferAlternatives = findArrivalTransferAlternativesFromTimetables(timetables, params, fastest);
+  return { options: { fastest, fewestTransfers }, transferAlternatives };
+}
+
 function transferStationsOf(route: TimedRoute) {
   return new Set(route.legs.slice(1).map((leg) => leg.boardStation));
 }
@@ -625,6 +645,44 @@ export async function findTransferAlternatives(params: {
     return [];
   }
   return findTransferAlternativesFromTimetables(await loadOfflineTimetables(), params);
+}
+
+/**
+ * 到着時刻指定版の「乗換駅違いルート比較」。出発時刻版(`findTransferAlternativesFromTimetables`)と同じく、
+ * 主経路が使う乗換駅を除外して再探索し、別の乗換駅を通る経路が見つかれば到着時刻順に最大2件を返す。
+ */
+function findArrivalTransferAlternativesFromTimetables(
+  timetables: OfflineTimetables,
+  params: {
+    origin: string;
+    destination: string;
+    arrivalByMinutes: number;
+    dayType: ServiceDayType;
+  },
+  primary: TimedRoute | null = findTimedRouteByArrivalFromTimetables(timetables, { ...params, preference: "fastest" }),
+): TimedRoute[] {
+  if (!primary || primary.legs.length <= 1) return primary ? [primary] : [];
+
+  const usedTransferStations = transferStationsOf(primary);
+  const alternative = findTimedRouteByArrivalFromTimetables(timetables, { ...params, preference: "fastest" }, usedTransferStations);
+  if (!alternative || alternative.legs.length === 0) return [primary];
+
+  const alternativeTransferStations = transferStationsOf(alternative);
+  if (sameTransferStations(usedTransferStations, alternativeTransferStations)) return [primary];
+
+  return [primary, alternative].sort((a, b) => a.arrivalMinutes - b.arrivalMinutes);
+}
+
+export async function findArrivalTransferAlternatives(params: {
+  origin: string;
+  destination: string;
+  arrivalByMinutes: number;
+  dayType: ServiceDayType;
+}): Promise<TimedRoute[]> {
+  if (!params.origin || !params.destination || params.origin === params.destination || !linesByStation.has(params.origin) || !linesByStation.has(params.destination)) {
+    return [];
+  }
+  return findArrivalTransferAlternativesFromTimetables(await loadOfflineTimetables(), params);
 }
 
 /**

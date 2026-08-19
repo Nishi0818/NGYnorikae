@@ -4,6 +4,8 @@ import {
   ALL_STATIONS,
   MINIMUM_TRANSFER_MINUTES,
   STATION_READINGS,
+  findArrivalRouteResults,
+  findArrivalTransferAlternatives,
   findDepartureRouteResults,
   findTimedRoute,
   findTimedRouteByArrival,
@@ -264,6 +266,45 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     const viaStations = alternatives.map((route) => route.legs[1]?.boardStation).sort();
     expect(viaStations).toEqual(["丸の内", "伏見"].sort());
     expect(alternatives[0].arrivalMinutes).toBeLessThanOrEqual(alternatives[1].arrivalMinutes);
+  });
+
+  it("到着時刻指定でも浅間町から名古屋は、丸の内経由と伏見経由の2つの乗換パターンを返す", async () => {
+    const alternatives = await findArrivalTransferAlternatives({
+      origin: "浅間町",
+      destination: "名古屋",
+      arrivalByMinutes: 9 * 60,
+      dayType: "weekday",
+    });
+
+    expect(alternatives).toHaveLength(2);
+    const viaStations = alternatives.map((route) => route.legs[1]?.boardStation).sort();
+    expect(viaStations).toEqual(["丸の内", "伏見"].sort());
+    expect(alternatives[0].arrivalMinutes).toBeLessThanOrEqual(alternatives[1].arrivalMinutes);
+  });
+
+  it("到着時刻指定で直通経路や代替が無い場合は1件だけ返す", async () => {
+    const direct = await findArrivalTransferAlternatives({
+      origin: "高畑",
+      destination: "藤が丘",
+      arrivalByMinutes: 9 * 60,
+      dayType: "weekday",
+    });
+    expect(direct).toHaveLength(1);
+    expect(direct[0].transferCount).toBe(0);
+  });
+
+  it("findArrivalRouteResultsは個別のfindTimedRouteByArrivalOptions・findArrivalTransferAlternativesと同じ結果を返す", async () => {
+    const params = { origin: "浅間町", destination: "名古屋", arrivalByMinutes: 9 * 60, dayType: "weekday" as const };
+    const [combined, options, alternatives] = await Promise.all([
+      findArrivalRouteResults(params),
+      findTimedRouteByArrivalOptions(params),
+      findArrivalTransferAlternatives(params),
+    ]);
+
+    expect(combined.options.fastest?.actualDepartureMinutes).toBe(options.fastest?.actualDepartureMinutes);
+    expect(combined.options.fastest?.arrivalMinutes).toBe(options.fastest?.arrivalMinutes);
+    expect(combined.options.fewestTransfers?.arrivalMinutes).toBe(options.fewestTransfers?.arrivalMinutes);
+    expect(combined.transferAlternatives.map((route) => route.arrivalMinutes)).toEqual(alternatives.map((route) => route.arrivalMinutes));
   });
 
   it("findDepartureRouteResultsは個別のfindTimedRouteOptions・findTransferAlternativesと同じ結果を返す(探索の重複排除リファクタの回帰確認)", async () => {

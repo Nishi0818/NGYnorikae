@@ -7,8 +7,8 @@ import {
   ALL_STATIONS,
   SUBWAY_LINES,
   TIMETABLE_REVISIONS,
+  findArrivalRouteResults,
   findDepartureRouteResults,
-  findTimedRouteByArrivalOptions,
   formatMinutes,
   getLinesForStation,
   getStationsForLine,
@@ -447,16 +447,11 @@ export default function HomeScreen() {
     }
     setIsSearching(true);
     try {
-      let nextOptions: RouteOptions;
-      let nextAlternatives: TimedRoute[];
-      if (timeMode === "arrival") {
-        nextOptions = await findTimedRouteByArrivalOptions({ origin, destination, arrivalByMinutes: timeMinutes, dayType: serviceDayType });
-        nextAlternatives = [];
-      } else {
-        const results = await findDepartureRouteResults({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
-        nextOptions = results.options;
-        nextAlternatives = results.transferAlternatives;
-      }
+      const results = timeMode === "arrival"
+        ? await findArrivalRouteResults({ origin, destination, arrivalByMinutes: timeMinutes, dayType: serviceDayType })
+        : await findDepartureRouteResults({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
+      const nextOptions: RouteOptions = results.options;
+      const nextAlternatives: TimedRoute[] = results.transferAlternatives;
       const nextRoute = nextOptions.fastest ?? nextOptions.fewestTransfers;
       if (!nextRoute) {
         setError(
