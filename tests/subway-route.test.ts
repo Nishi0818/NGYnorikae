@@ -131,6 +131,19 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     );
   });
 
+  it("区間距離がちょうど境界キロ数(浮動小数点の誤差が出やすい値)でも正しい運賃区分になる", async () => {
+    // 高畑→千種は東山線の区間距離を積み上げるとちょうど11.0kmだが、JSの浮動小数点演算では
+    // 11.000000000000002になり、Math.ceilでそのまま切り上げると12km区分(310円)に誤判定されていた。
+    const route = await findTimedRoute({
+      origin: "高畑",
+      destination: "千種",
+      departureMinutes: 8 * 60,
+      dayType: "weekday",
+    });
+    expect(route?.distanceKm).toBeCloseTo(11, 5);
+    expect(route?.fare).toBe(270);
+  });
+
   it("一社から丸の内は伏見で鶴舞線へ乗り換える経路を返す", async () => {
     const route = await findTimedRoute({
       origin: "一社",

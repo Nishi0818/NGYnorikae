@@ -293,7 +293,10 @@ export function getServiceDayType(date: Date): ServiceDayType {
 }
 
 function calculateFare(distanceKm: number) {
-  const roundedKm = Math.ceil(distanceKm);
+  // distanceKm は0.1km単位の区間距離を足し合わせて作るため、複数区間にまたがる経路では
+  // 浮動小数点演算の誤差で例えば「ちょうど11km」が11.000000000000002になることがある。
+  // 先に0.1km単位へ丸めてから切り上げることで、この誤差による運賃区分のズレを防ぐ。
+  const roundedKm = Math.ceil(Math.round(distanceKm * 10) / 10);
   if (roundedKm <= 3) return 210;
   if (roundedKm <= 7) return 240;
   if (roundedKm <= 11) return 270;
