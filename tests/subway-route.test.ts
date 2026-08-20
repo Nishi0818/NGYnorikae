@@ -4,6 +4,7 @@ import {
   ALL_STATIONS,
   MINIMUM_TRANSFER_MINUTES,
   STATION_READINGS,
+  SUBWAY_LINES,
   findArrivalRouteResults,
   findArrivalTransferAlternatives,
   findDepartureRouteResults,
@@ -77,6 +78,27 @@ describe("名古屋市営地下鉄オフライン経路探索", () => {
     expect(getTransferMinutes("金山", "meiko", "meijo")).toBe(3);
     expect(getTransferMinutes("名古屋", "higashiyama", "sakuradori")).toBe(7);
     expect(getTransferMinutes("伏見", "higashiyama", "sakuradori")).toBe(MINIMUM_TRANSFER_MINUTES);
+  });
+
+  it("実在する乗換駅(2路線が乗り入れる駅)はすべて個別の乗換時間が設定済みで、既定値(MINIMUM_TRANSFER_MINUTES)にフォールバックしない", () => {
+    // このテストは MINIMUM_TRANSFER_MINUTES 自体を検証するものではなく、
+    // 「未設定の駅が現状は存在しない」ことを保証する回帰テスト。将来、駅・路線構成が変わって
+    // 新しい乗換駅が増えたときに、乗換時間の設定漏れを検知できるようにしている。
+    const junctionStations = new Map<string, (typeof SUBWAY_LINES)[number][]>();
+    for (const station of ALL_STATIONS) {
+      const lines = SUBWAY_LINES.filter((line) => line.stations.includes(station));
+      if (lines.length >= 2) junctionStations.set(station, lines);
+    }
+
+    expect(junctionStations.size).toBeGreaterThan(0);
+    for (const [station, lines] of junctionStations) {
+      for (let i = 0; i < lines.length; i += 1) {
+        for (let j = i + 1; j < lines.length; j += 1) {
+          const minutes = getTransferMinutes(station, lines[i]!.id, lines[j]!.id);
+          expect(minutes, `${station}(${lines[i]!.id}⇔${lines[j]!.id})は既定値ではなく個別設定されているべき`).not.toBe(MINIMUM_TRANSFER_MINUTES);
+        }
+      }
+    }
   });
 
   it("出発マーカーは駅の路線色を使い、経路が確定した場合は最初の乗車路線を優先する", () => {

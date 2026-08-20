@@ -15,7 +15,13 @@ async function loadOfflineTimetables(): Promise<OfflineTimetables> {
   return offlineTimetablesPromise;
 }
 
-/** 未設定の乗換駅・路線ペアに使う保守的な既定値。 */
+/**
+ * 未設定の乗換駅・路線ペアに使う保守的な既定値。
+ * 現在は2路線が乗り入れる乗換駅13駅すべてに`TRANSFER_MINUTES_BY_CONNECTION`で個別の値を設定済みのため、
+ * 実際の検索でこの既定値が使われることは無い(テスト「乗換駅・路線ペアごとの乗換時間を対称に参照し、
+ * 未設定値には既定値を使う」で参照可能性自体は担保しつつ、「全乗換駅が個別設定済みであること」も
+ * 別途テストで検証している)。将来、駅を跨いで3路線目が乗り入れる駅が増えた場合などに備えて残している。
+ */
 export const MINIMUM_TRANSFER_MINUTES = 6;
 
 function transferConnectionKey(station: string, firstLineId: LineId, secondLineId: LineId) {
