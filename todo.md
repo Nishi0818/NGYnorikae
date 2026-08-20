@@ -27,3 +27,5 @@
 - [x] 到着時刻検索でも「乗換駅違いルート比較」を使えるようにする(findArrivalTransferAlternatives / findArrivalRouteResults)
 - [x] 運賃計算を公式運賃表・公式営業キロと比較する(テーブル・距離データとも一致を確認。副産物として浮動小数点誤差による運賃の誤表示バグを発見・未修正)
 - [x] React hydrationエラー(Minified React error #418)の原因調査・修正(ビルド時刻とハイドレーション時刻のズレによる「検索条件」欄の時刻表示不一致。suppressHydrationWarningで対処)
+- [x] MINIMUM_TRANSFER_MINUTESのデッドコード整理(実在する乗換駅はすべて個別設定済みであることを回帰テストで保証)
+- [x] 鶴舞線・桜通線・上飯田線の時刻表データ鮮度を再確認する(公式カタログに更新版なし、現状のデータが既に最新と確認)
