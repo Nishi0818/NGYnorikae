@@ -328,8 +328,12 @@ export default function HomeScreen() {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [error, setError] = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  // バス路線データは実行時取得のため、読み込み完了を検知して駅一覧の再計算(useMemo)を促す。
-  const [busReady, setBusReady] = useState(false);
+  // バス・名鉄データは実行時取得のため、読み込み完了を検知して駅一覧の再計算(useMemo)を促す。
+  // バス・名鉄は並行して読み込まれるため、同じboolean(true)を2回setするとReactが
+  // 2回目の状態更新を「変化なし」とみなして再描画をスキップし、片方だけ反映された
+  // 駅一覧のまま止まってしまう不具合があった。カウンタにして毎回必ず値を変える。
+  const [dataLoadTick, setDataLoadTick] = useState(0);
+  const bumpDataLoadTick = () => setDataLoadTick((tick) => tick + 1);
 
   const selectedDate = parseDateInput(dateText);
   const automaticDayType = selectedDate ? getServiceDayType(selectedDate) : "weekday";
@@ -344,8 +348,8 @@ export default function HomeScreen() {
         const lines = getLinesForStation(station);
         return stationKindFilter === "bus" ? lines.some((line) => isBusLine(line.id)) : lines.some((line) => !isBusLine(line.id));
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- busReadyは駅一覧(モジュール内キャッシュ)の再取得トリガーとして使うだけで値自体は参照しない
-  }, [stationLineFilter, stationQuery, stationKindFilter, busReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataLoadTickは駅一覧(モジュール内キャッシュ)の再取得トリガーとして使うだけで値自体は参照しない
+  }, [stationLineFilter, stationQuery, stationKindFilter, dataLoadTick]);
   const revisionDates = Array.from(
     SUBWAY_LINES.reduce((groups, line) => {
       const date = TIMETABLE_REVISIONS[line.id];
@@ -377,8 +381,8 @@ export default function HomeScreen() {
       preloadOfflineTimetables();
       // バスは地下鉄と違いビルド時にバンドルせず実行時取得のため、
       // 通信状態でのアイドル先読みが失敗しても検索自体は地下鉄のみで継続できるよう握りつぶす。
-      void loadBusNetwork().then(() => setBusReady(true)).catch((busLoadError) => console.error("bus load failed", busLoadError));
-      void loadMeitetsuNetwork().then(() => setBusReady(true)).catch((meitetsuLoadError) => console.error("meitetsu load failed", meitetsuLoadError));
+      void loadBusNetwork().then(bumpDataLoadTick).catch((busLoadError) => console.error("bus load failed", busLoadError));
+      void loadMeitetsuNetwork().then(bumpDataLoadTick).catch((meitetsuLoadError) => console.error("meitetsu load failed", meitetsuLoadError));
     });
     return () => cancelIdle(id);
   }, []);
@@ -394,12 +398,10 @@ export default function HomeScreen() {
     setStationKindFilter("all");
   }
 
-  function cycleStationKindFilter() {
-    const nextIndex = (STATION_KIND_SEQUENCE.indexOf(stationKindFilter) + 1) % STATION_KIND_SEQUENCE.length;
-    const next = STATION_KIND_SEQUENCE[nextIndex];
-    setStationKindFilter(next);
+  function selectStationKindFilter(kind: StationKindFilter) {
+    setStationKindFilter(kind);
     // 地下鉄・名鉄の路線チップは「停留所のみ」表示とは噛み合わず0件になってしまうため、切替時にリセットする。
-    if (next === "bus") setStationLineFilter("all");
+    if (kind === "bus") setStationLineFilter("all");
   }
 
   function selectStation(station: string) {
@@ -692,18 +694,26 @@ export default function HomeScreen() {
               <Text style={styles.sheetTitle}>駅を選択</Text>
             </View>
             <View style={styles.sheetHeaderActions}>
-              <Pressable
-                style={styles.stationKindToggle}
-                onPress={cycleStationKindFilter}
-                accessibilityRole="button"
-                accessibilityLabel={`表示切替: 現在「${STATION_KIND_META[stationKindFilter].label}」。タップで次の表示に切り替えます`}
-              >
-                <Ionicons name={STATION_KIND_META[stationKindFilter].icon} size={19} color={COLORS.navy} />
-              </Pressable>
+              <View style={styles.stationKindSegmented} accessibilityRole="tablist">
+                {STATION_KIND_SEQUENCE.map((kind) => {
+                  const active = stationKindFilter === kind;
+                  return (
+                    <Pressable
+                      key={kind}
+                      style={[styles.stationKindSegment, active && styles.stationKindSegmentActive]}
+                      onPress={() => selectStationKindFilter(kind)}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={STATION_KIND_META[kind].label}
+                    >
+                      <Ionicons name={STATION_KIND_META[kind].icon} size={17} color={active ? COLORS.navy : COLORS.lightMuted} />
+                    </Pressable>
+                  );
+                })}
+              </View>
               <Pressable style={styles.sheetClose} onPress={() => setPickerField(null)} accessibilityRole="button" accessibilityLabel="駅選択を閉じる"><Ionicons name="close" size={21} color={COLORS.ink} /></Pressable>
             </View>
           </View>
-          <Text style={styles.stationKindHint}>表示: {STATION_KIND_META[stationKindFilter].label}</Text>
           <View style={styles.stationSearch}>
             <Ionicons name="search" size={18} color={COLORS.muted} />
             <TextInput value={stationQuery} onChangeText={setStationQuery} placeholder="駅名を入力" placeholderTextColor={COLORS.lightMuted} style={styles.stationSearchInput} autoFocus />
@@ -777,6 +787,6 @@ const styles = StyleSheet.create({
   resultArea: { marginTop: 28 }, routePreferenceGroup: { flexDirection: "row", padding: 3, borderRadius: 16, marginBottom: 15 }, routePreferenceButton: { flex: 1, minHeight: 72, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, borderRadius: 13 }, routePreferenceButtonActive: { backgroundColor: "rgba(11,91,149,0.09)", borderWidth: 1, borderColor: "rgba(11,91,149,0.24)" }, routePreferenceLabel: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, routePreferenceLabelActive: { color: COLORS.navy }, routePreferenceMeta: { color: COLORS.ink, fontSize: 12, fontWeight: "700", marginTop: 2 }, routePreferenceMetaActive: { color: COLORS.navy }, routePreferenceHint: { color: COLORS.muted, fontSize: 9, marginTop: 2 }, routePreferenceHintActive: { color: COLORS.teal }, alternativeGroup: { flexDirection: "row", gap: 8, marginBottom: 12 }, alternativeChip: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface }, alternativeChipActive: { borderColor: COLORS.navy, backgroundColor: "rgba(11,91,149,0.08)" }, alternativeChipText: { color: COLORS.muted, fontSize: 12, fontWeight: "700" }, alternativeChipTextActive: { color: COLORS.navy }, resultOverline: { color: "#5E5144", fontSize: 12, fontWeight: "800", marginBottom: 9 }, resultHero: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, resultDeparture: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", letterSpacing: -0.7 }, resultArrival: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", textAlign: "right", letterSpacing: -0.7 }, resultPlace: { color: COLORS.muted, fontSize: 13, fontWeight: "700", marginTop: 3 }, resultArrowWrap: { alignItems: "center", gap: 1 }, resultDuration: { color: COLORS.navy, fontSize: 13, fontWeight: "800" }, resultTransfer: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, resultArrivalWrap: { alignItems: "flex-end" }, routeSteps: { marginTop: 18, gap: 8 }, routeLegSummary: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, routeLegColor: { width: 4, alignSelf: "stretch", borderRadius: 3 }, routeLegCopy: { flex: 1 }, routeLegHeading: { flexDirection: "row", alignItems: "center", gap: 8 }, linePill: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 }, linePillText: { fontSize: 11, fontWeight: "800" }, routeLegDirection: { flex: 1, color: COLORS.ink, fontSize: 14, fontWeight: "800" }, routeLegMeta: { color: COLORS.muted, fontSize: 11, marginTop: 5 }, routeTransferSummary: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderLeftWidth: 1, borderRightWidth: 1, borderColor: COLORS.border }, routeTransferText: { flex: 1, color: COLORS.muted, fontSize: 11, fontWeight: "700" }, walkLegSummary: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: "rgba(36,110,141,0.06)", borderWidth: 1, borderColor: "rgba(36,110,141,0.18)", borderStyle: "dashed" }, walkLegText: { flex: 1, color: COLORS.teal, fontSize: 12, fontWeight: "700" }, detailToggle: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginTop: 8 }, detailToggleText: { color: COLORS.navy, fontSize: 13, fontWeight: "800" },
   detailList: { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 12 }, detailLeg: { flexDirection: "row", minHeight: 72, gap: 9 }, detailLine: { width: 4, borderRadius: 2 }, detailLineWalk: { backgroundColor: COLORS.lightMuted }, detailTimes: { justifyContent: "space-between", paddingVertical: 1 }, detailTime: { color: COLORS.ink, fontSize: 13, fontWeight: "800" }, detailCopy: { flex: 1, justifyContent: "space-between", paddingBottom: 2 }, detailStation: { color: COLORS.ink, fontSize: 14, fontWeight: "800" }, detailDirection: { color: COLORS.muted, fontSize: 11 }, detailTransfer: { flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 8 }, detailConnector: { width: 4, height: 14, borderRadius: 2, backgroundColor: COLORS.amber }, detailTransferText: { color: "#81510D", fontSize: 11, fontWeight: "700" }, detailFooter: { marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: COLORS.border, flexDirection: "row", justifyContent: "space-between" }, detailFooterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   dataRow: { marginTop: 27, minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 }, dataRowText: { flex: 1, color: COLORS.muted, fontSize: 12, fontWeight: "700" }, dataDetail: { paddingTop: 3, paddingBottom: 3 }, dataRevisionText: { color: COLORS.navy, fontSize: 10, lineHeight: 15, marginVertical: 8, fontWeight: "700" }, dataPrivacyText: { color: COLORS.muted, fontSize: 10, lineHeight: 15 }, dialogBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: "rgba(18,27,35,0.28)" }, cacheDialog: { width: "100%", maxWidth: 360, padding: 22, borderRadius: 22, alignItems: "center", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "rgba(18,117,187,0.16)", shadowColor: "#0B5B95", shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 8 }, cacheDialogIcon: { width: 44, height: 44, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11,91,149,0.09)" }, cacheDialogTitle: { color: COLORS.ink, fontSize: 18, fontWeight: "800", marginTop: 14 }, cacheDialogText: { color: COLORS.muted, fontSize: 13, lineHeight: 20, textAlign: "center", marginTop: 8 }, cacheDialogHint: { color: COLORS.lightMuted, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: 5 }, cacheDialogActions: { width: "100%", flexDirection: "row", gap: 9, marginTop: 21 }, cacheDialogCancel: { flex: 1, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: COLORS.border }, cacheDialogCancelText: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, cacheDialogConfirm: { flex: 1.35, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: COLORS.navy }, cacheDialogConfirmDisabled: { opacity: 0.7 }, cacheDialogConfirmText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
-  sheetScreen: { flex: 1, backgroundColor: COLORS.canvas }, sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 17, backgroundColor: COLORS.surface }, sheetOverline: { color: COLORS.teal, fontSize: 11, fontWeight: "800" }, sheetTitle: { color: COLORS.ink, fontSize: 24, fontWeight: "800", marginTop: 3 }, sheetClose: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.elevated }, sheetHeaderActions: { flexDirection: "row", alignItems: "center", gap: 8 }, stationKindToggle: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11,91,149,0.09)", borderWidth: 1, borderColor: "rgba(11,91,149,0.22)" }, stationKindHint: { color: COLORS.teal, fontSize: 11, fontWeight: "700", paddingHorizontal: 20, paddingTop: 8, backgroundColor: COLORS.surface }, stationSearch: { margin: 16, minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderRadius: 15, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, stationSearchInput: { flex: 1, color: COLORS.ink, fontFamily: "NotoSansJP", fontSize: 15, paddingVertical: 9 }, lineFilterScroll: { maxHeight: 42, marginBottom: 8 }, lineFilterContent: { paddingHorizontal: 16, gap: 8 }, lineFilterChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface }, lineFilterChipActive: { borderColor: COLORS.navy, backgroundColor: "rgba(11,91,149,0.08)" }, lineFilterDot: { width: 7, height: 7, borderRadius: 4 }, lineFilterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, lineFilterTextActive: { color: COLORS.navy }, stationCount: { color: COLORS.muted, marginHorizontal: 20, marginBottom: 7, fontSize: 12 }, stationList: { paddingHorizontal: 16, paddingBottom: 28 }, stationOption: { minHeight: 55, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border }, stationOptionDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.teal }, stationOptionText: { flex: 1, color: COLORS.ink, fontSize: 16, fontWeight: "700" }, emptyStationText: { color: COLORS.muted, textAlign: "center", padding: 30 },
+  sheetScreen: { flex: 1, backgroundColor: COLORS.canvas }, sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 17, backgroundColor: COLORS.surface }, sheetOverline: { color: COLORS.teal, fontSize: 11, fontWeight: "800" }, sheetTitle: { color: COLORS.ink, fontSize: 24, fontWeight: "800", marginTop: 3 }, sheetClose: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.elevated }, sheetHeaderActions: { flexDirection: "row", alignItems: "center", gap: 8 }, stationKindSegmented: { flexDirection: "row", padding: 3, borderRadius: 16, backgroundColor: "rgba(11,91,149,0.07)", borderWidth: 1, borderColor: "rgba(11,91,149,0.16)" }, stationKindSegment: { width: 32, height: 32, borderRadius: 13, alignItems: "center", justifyContent: "center" }, stationKindSegmentActive: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: "rgba(11,91,149,0.28)" }, stationSearch: { margin: 16, minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderRadius: 15, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, stationSearchInput: { flex: 1, color: COLORS.ink, fontFamily: "NotoSansJP", fontSize: 15, paddingVertical: 9 }, lineFilterScroll: { height: 42, flexShrink: 0, marginBottom: 8 }, lineFilterContent: { paddingHorizontal: 16, gap: 8 }, lineFilterChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface }, lineFilterChipActive: { borderColor: COLORS.navy, backgroundColor: "rgba(11,91,149,0.08)" }, lineFilterDot: { width: 7, height: 7, borderRadius: 4 }, lineFilterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, lineFilterTextActive: { color: COLORS.navy }, stationCount: { color: COLORS.muted, marginHorizontal: 20, marginBottom: 7, fontSize: 12 }, stationList: { paddingHorizontal: 16, paddingBottom: 28 }, stationOption: { minHeight: 55, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border }, stationOptionDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.teal }, stationOptionText: { flex: 1, color: COLORS.ink, fontSize: 16, fontWeight: "700" }, emptyStationText: { color: COLORS.muted, textAlign: "center", padding: 30 },
   nowButton: { alignSelf: "flex-start", margin: 20, marginBottom: 7, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, nowButtonText: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, optionSection: { marginHorizontal: 20, marginTop: 18 }, optionHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, optionLabel: { color: COLORS.ink, fontSize: 13, fontWeight: "800" }, autoText: { color: COLORS.muted, fontSize: 11, fontWeight: "800" }, optionInput: { minHeight: 50, marginTop: 9, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, borderRadius: 14, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, optionTextInput: { flex: 1, color: COLORS.ink, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700", paddingVertical: 8 }, segmented: { marginTop: 9, padding: 3, flexDirection: "row", borderRadius: 14, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, segment: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 11 }, segmentActive: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, segmentText: { color: COLORS.muted, fontSize: 13, fontWeight: "700" }, segmentTextActive: { color: COLORS.navy }, optionHint: { color: COLORS.muted, fontSize: 11, lineHeight: 16, marginTop: 8 }, applyButton: { minHeight: 54, marginHorizontal: 20, marginTop: 29, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: COLORS.navy }, applyButtonText: { color: COLORS.surface, fontSize: 16, fontWeight: "800" },
 });
