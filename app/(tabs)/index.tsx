@@ -314,7 +314,8 @@ export default function HomeScreen() {
   const [stationQuery, setStationQuery] = useState("");
   const [stationLineFilter, setStationLineFilter] = useState<LineId | "all">("all");
   // バス統合で駅の選択肢が大幅に増えたため、「駅(地下鉄・名鉄)のみ」「停留所(バス)のみ」を切り替えられるようにする。
-  const [stationKindFilter, setStationKindFilter] = useState<StationKindFilter>("all");
+  // デフォルトは電車モード(地下鉄・名鉄)。バス停まで含めた一覧はユーザーが明示的に切り替える。
+  const [stationKindFilter, setStationKindFilter] = useState<StationKindFilter>("rail");
   const [showOptions, setShowOptions] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showDataInfo, setShowDataInfo] = useState(false);
@@ -395,7 +396,7 @@ export default function HomeScreen() {
     setPickerField(field);
     setStationQuery("");
     setStationLineFilter("all");
-    setStationKindFilter("all");
+    setStationKindFilter("rail");
   }
 
   function selectStationKindFilter(kind: StationKindFilter) {
