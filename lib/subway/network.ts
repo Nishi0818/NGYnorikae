@@ -4,14 +4,15 @@ import type { LineId, RouteLeg, RoutePreference, ServiceDayType, SubwayLine, Tim
 
 export { TIMETABLE_REVISIONS, japaneseHolidayName };
 
-let offlineTimetablesPromise: Promise<OfflineTimetables> | undefined;
+let offlineTimetablesPromise: Promise<Record<string, OfflineTimetables[string]>> | undefined;
 
 /**
  * 駅・路線の選択画面を軽量に保つため、巨大な時刻表本体は検索が実行された時点でのみ読み込む。
  * 読み込み後は同じPromiseを共有するため、以後の検索はオフラインのメモリ内データを利用する。
+ * 戻り値は可変オブジェクト（`loadBusNetwork`がバスの時刻表をここに追記するため）。
  */
-async function loadOfflineTimetables(): Promise<OfflineTimetables> {
-  offlineTimetablesPromise ??= import("./timetable.generated").then((module) => module.OFFLINE_TIMETABLES as OfflineTimetables);
+async function loadOfflineTimetables(): Promise<Record<string, OfflineTimetables[string]>> {
+  offlineTimetablesPromise ??= import("./timetable.generated").then((module) => ({ ...(module.OFFLINE_TIMETABLES as OfflineTimetables) }));
   return offlineTimetablesPromise;
 }
 
@@ -52,6 +53,9 @@ export const TRANSFER_MINUTES_BY_CONNECTION: Readonly<Record<string, number>> = 
 
 export function getTransferMinutes(station: string, fromLineId: LineId, toLineId: LineId) {
   if (fromLineId === toLineId) return 0;
+  // 徒歩連絡（駅名が異なる乗換駅同士を結ぶ仮想区間）自体が「乗換にかかる時間」を表すため、
+  // その前後で通常の乗換ペナルティ(既定6分)を重ねて加算しない。
+  if (fromLineId.startsWith("meitetsu_walk_") || toLineId.startsWith("meitetsu_walk_")) return 0;
   return TRANSFER_MINUTES_BY_CONNECTION[transferConnectionKey(station, fromLineId, toLineId)] ?? MINIMUM_TRANSFER_MINUTES;
 }
 
@@ -219,10 +223,88 @@ for (const line of SUBWAY_LINES) {
     linesByStation.set(station, [...(linesByStation.get(station) ?? []), line]);
   }
 }
+// バス統合後は駅数が動的に増えるため、ALL_STATIONS相当の一覧はこの可変配列で管理する。
+let allStationsCache = ALL_STATIONS;
+function recomputeAllStations() {
+  allStationsCache = [...new Set([...linesByStation.keys()])].sort((a, b) => a.localeCompare(b, "ja"));
+}
+
+type ExternalLineJson = { id: string; name: string; stations: string[]; distances: number[] };
+
+/**
+ * 地下鉄以外の交通ネットワーク（バス・名鉄）を実行時に取得し、
+ * 検索インデックス（路線マップ・時刻表）に追記する共通処理。
+ * バンドルサイズを抑えるため、地下鉄と違いビルド時にはバンドルせず`public/<urlBase>/`から`fetch`する
+ * （初回検索がまだ通信していない場合は失敗しうるため、`preloadOfflineTimetables`と同様に
+ *  アイドル時間の先読みを呼び出し側で行う想定）。
+ * 駅の同一性は駅名（文字列）で判定する既存の設計を踏襲しているため、たまたま同名の
+ * 停留所・駅が別々の実在地点であっても同一ノードとして扱われる制約がある。
+ */
+async function loadExternalNetwork(urlBase: string, lineColor: string): Promise<void> {
+  if (typeof fetch === "undefined") return;
+  const [externalLines, externalTimetables, timetables] = await Promise.all([
+    fetch(`/${urlBase}/lines.generated.json`).then((r) => r.json() as Promise<ExternalLineJson[]>),
+    fetch(`/${urlBase}/timetable.generated.json`).then((r) => r.json() as Promise<Record<string, OfflineTimetables[string]>>),
+    loadOfflineTimetables(),
+  ]);
+  for (const externalLine of externalLines) {
+    const line: SubwayLine = {
+      id: externalLine.id,
+      name: externalLine.name,
+      color: lineColor,
+      textColor: "#FFFFFF",
+      stations: externalLine.stations,
+      distances: externalLine.distances,
+      positiveDirectionLabel: `${externalLine.stations[externalLine.stations.length - 1]}方面`,
+      negativeDirectionLabel: `${externalLine.stations[0]}方面`,
+    };
+    lineById.set(line.id, line);
+    for (const station of line.stations) {
+      linesByStation.set(station, [...(linesByStation.get(station) ?? []), line]);
+    }
+  }
+  Object.assign(timetables, externalTimetables);
+  recomputeAllStations();
+}
+
+let busNetworkPromise: Promise<void> | undefined;
+const BUS_LINE_COLOR = "#2E9E5B";
+
+/** 名古屋市バスのGTFS-JPから生成した実データ（駅×方向×平日/休日の発車時刻）を取り込む。 */
+export function loadBusNetwork(): Promise<void> {
+  busNetworkPromise ??= loadExternalNetwork("bus", BUS_LINE_COLOR);
+  return busNetworkPromise;
+}
+
+let meitetsuNetworkPromise: Promise<void> | undefined;
+const MEITETSU_LINE_COLOR = "#C4001F";
+
+/**
+ * 名鉄（名古屋本線・犬山線・常滑線）を取り込む。名鉄には公式時刻表オープンデータが無いため、
+ * バスと異なり実データではなく「距離÷想定表定速度」の概算所要時間と、一定間隔運行と
+ * 仮定した合成ダイヤ（平日/休日とも同一）を使っている。詳細は変換元スクリプトのコメント参照。
+ */
+export function loadMeitetsuNetwork(): Promise<void> {
+  meitetsuNetworkPromise ??= loadExternalNetwork("meitetsu", MEITETSU_LINE_COLOR);
+  return meitetsuNetworkPromise;
+}
+
+export function isBusLine(lineId: LineId) {
+  return lineId.startsWith("bus_");
+}
+
+export function isMeitetsuLine(lineId: LineId) {
+  return lineId.startsWith("meitetsu_");
+}
+
+/** 駅名が異なる乗換駅同士（例: 名古屋⇔名鉄名古屋）を結ぶ、徒歩連絡専用の仮想路線かどうか。 */
+export function isWalkConnector(lineId: LineId) {
+  return lineId.startsWith("meitetsu_walk_");
+}
 
 /** 駅選択で使う、指定路線の駅一覧。全路線指定時は五十音順の全駅を返す。 */
 export function getStationsForLine(lineId: LineId | "all") {
-  return lineId === "all" ? ALL_STATIONS : lineById.get(lineId)?.stations ?? [];
+  return lineId === "all" ? allStationsCache : lineById.get(lineId)?.stations ?? [];
 }
 
 /** カタカナをひらがなに変換する。読みがな入力の予測変換で表記を揃えるために使う。 */
@@ -298,16 +380,109 @@ export function getServiceDayType(date: Date): ServiceDayType {
   return day === 0 || day === 6 || isJapaneseHoliday(date) ? "holiday" : "weekday";
 }
 
-function calculateFare(distanceKm: number) {
-  // distanceKm は0.1km単位の区間距離を足し合わせて作るため、複数区間にまたがる経路では
-  // 浮動小数点演算の誤差で例えば「ちょうど11km」が11.000000000000002になることがある。
-  // 先に0.1km単位へ丸めてから切り上げることで、この誤差による運賃区分のズレを防ぐ。
-  const roundedKm = Math.ceil(Math.round(distanceKm * 10) / 10);
+/** 0.1km単位に丸めてから切り上げる。複数区間の距離を積算すると浮動小数点誤差が乗るため。 */
+function roundDistanceKm(distanceKm: number) {
+  return Math.ceil(Math.round(distanceKm * 10) / 10);
+}
+
+function calculateSubwayFare(distanceKm: number) {
+  const roundedKm = roundDistanceKm(distanceKm);
   if (roundedKm <= 3) return 210;
   if (roundedKm <= 7) return 240;
   if (roundedKm <= 11) return 270;
   if (roundedKm <= 15) return 310;
   return 340;
+}
+
+/** 名古屋市バスの大人普通運賃（均一210円・1乗車ごと）。2026年時点。 */
+const NAGOYA_BUS_FARE = 210;
+
+/**
+ * 名鉄の大人普通旅客運賃（対キロ区間制、2024年3月16日改定後）。
+ * 出典: 名鉄ニュースリリース(2023-09-01)・第三者集計の運賃早見表で初乗り(180円)・
+ * 65～68km区間(1,270円、名鉄名古屋～豊橋間の公表値)と整合を確認済み。
+ * 実際の名鉄運賃計算には特定区間の特殊運賃・加算運賃(空港線等)があり、
+ * ここでは営業キロのみに基づく本則運賃として概算している。
+ */
+const MEITETSU_FARE_TABLE: readonly { maxKm: number; fare: number }[] = [
+  { maxKm: 3, fare: 180 }, { maxKm: 4, fare: 210 }, { maxKm: 7, fare: 250 }, { maxKm: 8, fare: 270 },
+  { maxKm: 12, fare: 330 }, { maxKm: 16, fare: 400 }, { maxKm: 20, fare: 460 }, { maxKm: 24, fare: 510 },
+  { maxKm: 28, fare: 570 }, { maxKm: 32, fare: 630 }, { maxKm: 36, fare: 690 }, { maxKm: 40, fare: 750 },
+  { maxKm: 44, fare: 830 }, { maxKm: 48, fare: 900 }, { maxKm: 52, fare: 980 }, { maxKm: 56, fare: 1050 },
+  { maxKm: 60, fare: 1120 }, { maxKm: 64, fare: 1190 }, { maxKm: 68, fare: 1270 }, { maxKm: 72, fare: 1320 },
+  { maxKm: 76, fare: 1380 }, { maxKm: 80, fare: 1430 }, { maxKm: 85, fare: 1500 }, { maxKm: 90, fare: 1550 },
+  { maxKm: 95, fare: 1610 }, { maxKm: 100, fare: 1670 }, { maxKm: 110, fare: 1760 }, { maxKm: 120, fare: 1860 },
+  { maxKm: 130, fare: 1950 }, { maxKm: 143, fare: 2050 },
+];
+
+function calculateMeitetsuFare(distanceKm: number) {
+  const roundedKm = roundDistanceKm(distanceKm);
+  const tier = MEITETSU_FARE_TABLE.find((t) => roundedKm <= t.maxKm);
+  return tier ? tier.fare : MEITETSU_FARE_TABLE[MEITETSU_FARE_TABLE.length - 1].fare;
+}
+
+type FareOperator = "subway" | "bus" | "meitetsu";
+
+function fareOperatorForLine(lineId: LineId): FareOperator | null {
+  if (isWalkConnector(lineId)) return null; // 徒歩連絡は運賃対象外
+  if (isBusLine(lineId)) return "bus";
+  if (isMeitetsuLine(lineId)) return "meitetsu";
+  return "subway";
+}
+
+/**
+ * manaca乗継割引: 地下鉄⇔市バス・市バス⇔市バスを90分以内に乗り継いだ場合、
+ * 2乗車目以降の運賃から1回の乗継につき80円引く。
+ * 出典: 名古屋市交通局の乗継割引案内（対象は地下鉄・市バス間のみ）。
+ * 名鉄の乗継割引は名鉄電車⇔名鉄バスの組み合わせのみが対象で、地下鉄・市バスとは
+ * 提携していないため、名鉄が絡む乗継はこの割引の対象外とする。
+ */
+const TRANSFER_DISCOUNT_YEN = 80;
+const TRANSFER_DISCOUNT_WINDOW_MINUTES = 90;
+
+/**
+ * 名鉄には知多新線・豊田線・羽島線・空港線の4路線に加算運賃が設定されているが、
+ * 本アプリが収録する名古屋本線・犬山線・常滑線はいずれも対象外のため未対応
+ * （2025年8月時点の名鉄公表資料で確認済み。対象路線を追加収録する場合は要対応）。
+ */
+
+/**
+ * 経路全体の運賃を、乗車した会社(地下鉄/名鉄/バス)ごとに分けて計算し合算する。
+ * バスは乗車ごとに均一210円、地下鉄・名鉄はその会社区間の合計距離に対する対キロ運賃。
+ * 地下鉄⇔バス・バス⇔バスの乗継にはmanaca乗継割引(90分以内・1回80円引き)を適用する。
+ * 徒歩連絡区間（同名でない乗換駅を結ぶ仮想区間）は運賃計算から除外する。
+ */
+function calculateFare(legs: readonly RouteLeg[]) {
+  const billedLegs = legs
+    .map((leg) => ({ leg, operator: fareOperatorForLine(leg.lineId) }))
+    .filter((entry): entry is { leg: RouteLeg; operator: FareOperator } => entry.operator !== null);
+
+  let total = 0;
+  let subwayKm = 0;
+  let meitetsuKm = 0;
+  let transferDiscountCount = 0;
+
+  billedLegs.forEach(({ leg, operator }, index) => {
+    if (operator === "bus") total += NAGOYA_BUS_FARE;
+    else if (operator === "meitetsu") meitetsuKm += leg.distanceKm;
+    else subwayKm += leg.distanceKm;
+
+    if (index === 0) return;
+    const previous = billedLegs[index - 1];
+    // 地下鉄の路線を跨いでも改札を出ない限りは同一乗車(運賃継続)なので新たな乗車とみなさない。
+    // バスは路線が変わるたび必ず乗り直しになるため、常に新たな乗車として扱う。
+    const isNewBoarding = operator === "bus" || previous.operator !== operator;
+    const eligibleForDiscount = (operator === "bus" || operator === "subway") && (previous.operator === "bus" || previous.operator === "subway");
+    if (isNewBoarding && eligibleForDiscount) {
+      const gapMinutes = leg.departureMinutes - previous.leg.arrivalMinutes;
+      if (gapMinutes <= TRANSFER_DISCOUNT_WINDOW_MINUTES) transferDiscountCount += 1;
+    }
+  });
+
+  if (subwayKm > 0) total += calculateSubwayFare(subwayKm);
+  if (meitetsuKm > 0) total += calculateMeitetsuFare(meitetsuKm);
+  total -= transferDiscountCount * TRANSFER_DISCOUNT_YEN;
+  return Math.max(0, total);
 }
 
 function stateKey(station: string, lineId: LineId | null) {
@@ -476,7 +651,7 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
     arrivalMinutes: bestResult.arrivalMinutes,
     totalMinutes: bestResult.arrivalMinutes - departureMinutes,
     transferCount,
-    fare: calculateFare(distanceKm),
+    fare: calculateFare(legs),
     distanceKm,
     legs,
   };

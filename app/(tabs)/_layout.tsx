@@ -11,7 +11,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "なごや地下鉄オフライン案内",
+          title: "なごや乗換案内",
         }}
       />
     </Tabs>

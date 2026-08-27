@@ -3,13 +3,20 @@ export type ServiceDayType = "weekday" | "holiday";
 /** 経路結果を並べる基準。最短は到着時刻、乗換少なめは乗換回数を優先する。 */
 export type RoutePreference = "fastest" | "fewestTransfers";
 
-export type LineId =
+/** 地下鉄6路線の固有id。乗換時間テーブル等、地下鉄固有のロジックで使う。 */
+export type SubwayLineId =
   | "higashiyama"
   | "meijo"
   | "meiko"
   | "tsurumai"
   | "sakuradori"
   | "kamiida";
+
+/**
+ * 路線・系統を横断的に扱うための汎用id。地下鉄は上記6種、バスは`bus_`で始まる
+ * GTFSパターンid（例: "bus_0001001"）。将来的に名鉄を追加する場合もこの型を使う。
+ */
+export type LineId = SubwayLineId | (string & {});
 
 export type SubwayLine = {
   id: LineId;

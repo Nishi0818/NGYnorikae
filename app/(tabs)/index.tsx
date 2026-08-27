@@ -13,7 +13,12 @@ import {
   getLinesForStation,
   getStationsForLine,
   getServiceDayType,
+  isBusLine,
+  isMeitetsuLine,
+  isWalkConnector,
   japaneseHolidayName,
+  loadBusNetwork,
+  loadMeitetsuNetwork,
   matchesStationQuery,
   minutesFromTimeText,
   preloadOfflineTimetables,
@@ -22,6 +27,13 @@ import type { LineId, RoutePreference, ServiceDayType, SubwayLine, TimedRoute } 
 import { loadSearchHistory, mergeSearchHistory, saveSearchHistory, type SearchHistoryEntry } from "@/lib/subway/search-history";
 
 type StationField = "origin" | "destination";
+type StationKindFilter = "all" | "rail" | "bus";
+const STATION_KIND_SEQUENCE: readonly StationKindFilter[] = ["all", "rail", "bus"];
+const STATION_KIND_META: Record<StationKindFilter, { icon: "layers-outline" | "train-outline" | "bus-outline"; label: string }> = {
+  all: { icon: "layers-outline", label: "すべて" },
+  rail: { icon: "train-outline", label: "駅のみ（地下鉄・名鉄）" },
+  bus: { icon: "bus-outline", label: "停留所のみ（バス）" },
+};
 type DayMode = "auto" | ServiceDayType;
 type TimeMode = "departure" | "arrival";
 type RouteOptions = Record<RoutePreference, TimedRoute | null>;
@@ -208,22 +220,32 @@ function ResultPanel({
       <View style={styles.routeSteps}>
         {route.legs.map((leg, index) => {
           const nextLeg = route.legs[index + 1];
+          const walkLeg = isWalkConnector(leg.lineId);
+          // 徒歩連絡の前後は、連絡区間自体が「乗換」を表すため、重ねて乗換ボックスを出さない。
+          const showTransferAfter = nextLeg && !walkLeg && !isWalkConnector(nextLeg.lineId);
           return (
             <View key={`${leg.lineId}-${leg.boardStation}-${leg.alightStation}-${index}`}>
-              <View style={[styles.routeLegSummary, styles.glassPanel]}>
-                <View style={[styles.routeLegColor, { backgroundColor: leg.lineColor }]} />
-                <View style={styles.routeLegCopy}>
-                  <View style={styles.routeLegHeading}>
-                    <View style={[styles.linePill, { backgroundColor: leg.lineColor }]}>
-                      <Text style={[styles.linePillText, { color: leg.textColor }]}>{leg.lineName}</Text>
-                    </View>
-                    <Text style={styles.routeLegDirection}>{leg.directionLabel}</Text>
-                  </View>
-                  <Text style={styles.routeLegMeta}>{leg.boardStation} {formatMinutes(leg.departureMinutes)}発 → {leg.alightStation} {formatMinutes(leg.arrivalMinutes)}着</Text>
+              {walkLeg ? (
+                <View style={[styles.walkLegSummary, styles.glassPanel]}>
+                  <Ionicons name="walk-outline" size={18} color={COLORS.teal} />
+                  <Text style={styles.walkLegText}>{leg.boardStation} から {leg.alightStation} まで徒歩で連絡（約{Math.max(1, leg.rideMinutes)}分）</Text>
                 </View>
-                <Ionicons name="train-outline" size={20} color={COLORS.navy} />
-              </View>
-              {nextLeg && (
+              ) : (
+                <View style={[styles.routeLegSummary, styles.glassPanel]}>
+                  <View style={[styles.routeLegColor, { backgroundColor: leg.lineColor }]} />
+                  <View style={styles.routeLegCopy}>
+                    <View style={styles.routeLegHeading}>
+                      <View style={[styles.linePill, { backgroundColor: leg.lineColor }]}>
+                        <Text style={[styles.linePillText, { color: leg.textColor }]}>{leg.lineName}</Text>
+                      </View>
+                      <Text style={styles.routeLegDirection}>{leg.directionLabel}</Text>
+                    </View>
+                    <Text style={styles.routeLegMeta}>{leg.boardStation} {formatMinutes(leg.departureMinutes)}発 → {leg.alightStation} {formatMinutes(leg.arrivalMinutes)}着</Text>
+                  </View>
+                  <Ionicons name={isBusLine(leg.lineId) ? "bus-outline" : "train-outline"} size={20} color={COLORS.navy} />
+                </View>
+              )}
+              {showTransferAfter && (
                 <View style={[styles.routeTransferSummary, styles.glassPanel]}>
                   <Ionicons name="walk-outline" size={16} color={COLORS.muted} />
                   <Text style={styles.routeTransferText}>{leg.alightStation}で{nextLeg.lineName}へ乗換 · 推奨最小 {nextLeg.transferMinutes}分</Text>
@@ -241,28 +263,35 @@ function ResultPanel({
 
       {detailsOpen && (
         <View style={styles.detailList}>
-          {route.legs.map((leg, index) => (
-            <View key={`${leg.lineId}-${leg.boardStation}-${leg.alightStation}-${index}`}>
-              {index > 0 && (
-                <View style={styles.detailTransfer}>
-                  <View style={styles.detailConnector} />
-                  <Text style={styles.detailTransferText}>{leg.boardStation}で乗換・推奨最小 {leg.transferMinutes} 分</Text>
-                </View>
-              )}
-              <View style={styles.detailLeg}>
-                <View style={[styles.detailLine, { backgroundColor: leg.lineColor }]} />
-                <View style={styles.detailTimes}>
-                  <Text style={styles.detailTime}>{formatMinutes(leg.departureMinutes)}</Text>
-                  <Text style={styles.detailTime}>{formatMinutes(leg.arrivalMinutes)}</Text>
-                </View>
-                <View style={styles.detailCopy}>
-                  <Text style={styles.detailStation}>{leg.boardStation}</Text>
-                  <Text style={styles.detailDirection}>{leg.lineName}・{leg.directionLabel}・乗車 {leg.rideMinutes}分</Text>
-                  <Text style={styles.detailStation}>{leg.alightStation}</Text>
+          {route.legs.map((leg, index) => {
+            const previousLeg = route.legs[index - 1];
+            const walkLeg = isWalkConnector(leg.lineId);
+            const showTransferBefore = index > 0 && !walkLeg && previousLeg && !isWalkConnector(previousLeg.lineId);
+            return (
+              <View key={`${leg.lineId}-${leg.boardStation}-${leg.alightStation}-${index}`}>
+                {showTransferBefore && (
+                  <View style={styles.detailTransfer}>
+                    <View style={styles.detailConnector} />
+                    <Text style={styles.detailTransferText}>{leg.boardStation}で乗換・推奨最小 {leg.transferMinutes} 分</Text>
+                  </View>
+                )}
+                <View style={styles.detailLeg}>
+                  <View style={[styles.detailLine, walkLeg ? styles.detailLineWalk : { backgroundColor: leg.lineColor }]} />
+                  <View style={styles.detailTimes}>
+                    <Text style={styles.detailTime}>{formatMinutes(leg.departureMinutes)}</Text>
+                    <Text style={styles.detailTime}>{formatMinutes(leg.arrivalMinutes)}</Text>
+                  </View>
+                  <View style={styles.detailCopy}>
+                    <Text style={styles.detailStation}>{leg.boardStation}</Text>
+                    <Text style={styles.detailDirection}>
+                      {walkLeg ? `徒歩で連絡・${Math.max(1, leg.rideMinutes)}分` : `${leg.lineName}・${leg.directionLabel}・乗車 ${leg.rideMinutes}分`}
+                    </Text>
+                    <Text style={styles.detailStation}>{leg.alightStation}</Text>
+                  </View>
                 </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
           <View style={styles.detailFooter}>
             <Text style={styles.detailFooterText}>運賃 {route.fare}円 · 距離 {route.distanceKm.toFixed(1)} km</Text>
             <Text style={styles.detailFooterText}>最終区間 {destinationLeg.lineName}</Text>
@@ -284,6 +313,9 @@ export default function HomeScreen() {
   const [pickerField, setPickerField] = useState<StationField | null>(null);
   const [stationQuery, setStationQuery] = useState("");
   const [stationLineFilter, setStationLineFilter] = useState<LineId | "all">("all");
+  // バス統合で駅の選択肢が大幅に増えたため、「駅(地下鉄・名鉄)のみ」「停留所(バス)のみ」を切り替えられるようにする。
+  // デフォルトは電車モード(地下鉄・名鉄)。バス停まで含めた一覧はユーザーが明示的に切り替える。
+  const [stationKindFilter, setStationKindFilter] = useState<StationKindFilter>("rail");
   const [showOptions, setShowOptions] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showDataInfo, setShowDataInfo] = useState(false);
@@ -297,6 +329,12 @@ export default function HomeScreen() {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [error, setError] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  // バス・名鉄データは実行時取得のため、読み込み完了を検知して駅一覧の再計算(useMemo)を促す。
+  // バス・名鉄は並行して読み込まれるため、同じboolean(true)を2回setするとReactが
+  // 2回目の状態更新を「変化なし」とみなして再描画をスキップし、片方だけ反映された
+  // 駅一覧のまま止まってしまう不具合があった。カウンタにして毎回必ず値を変える。
+  const [dataLoadTick, setDataLoadTick] = useState(0);
+  const bumpDataLoadTick = () => setDataLoadTick((tick) => tick + 1);
 
   const selectedDate = parseDateInput(dateText);
   const automaticDayType = selectedDate ? getServiceDayType(selectedDate) : "weekday";
@@ -304,8 +342,15 @@ export default function HomeScreen() {
   const serviceDayType: ServiceDayType = dayMode === "auto" ? automaticDayType : dayMode;
   const stationMatches = useMemo(() => {
     const query = stationQuery.trim();
-    return getStationsForLine(stationLineFilter).filter((station) => matchesStationQuery(station, query));
-  }, [stationLineFilter, stationQuery]);
+    return getStationsForLine(stationLineFilter)
+      .filter((station) => matchesStationQuery(station, query))
+      .filter((station) => {
+        if (stationKindFilter === "all") return true;
+        const lines = getLinesForStation(station);
+        return stationKindFilter === "bus" ? lines.some((line) => isBusLine(line.id)) : lines.some((line) => !isBusLine(line.id));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataLoadTickは駅一覧(モジュール内キャッシュ)の再取得トリガーとして使うだけで値自体は参照しない
+  }, [stationLineFilter, stationQuery, stationKindFilter, dataLoadTick]);
   const revisionDates = Array.from(
     SUBWAY_LINES.reduce((groups, line) => {
       const date = TIMETABLE_REVISIONS[line.id];
@@ -333,7 +378,13 @@ export default function HomeScreen() {
       ?? ((cb: () => void) => window.setTimeout(cb, 300));
     const cancelIdle = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback
       ?? window.clearTimeout;
-    const id = scheduleIdle(preloadOfflineTimetables);
+    const id = scheduleIdle(() => {
+      preloadOfflineTimetables();
+      // バスは地下鉄と違いビルド時にバンドルせず実行時取得のため、
+      // 通信状態でのアイドル先読みが失敗しても検索自体は地下鉄のみで継続できるよう握りつぶす。
+      void loadBusNetwork().then(bumpDataLoadTick).catch((busLoadError) => console.error("bus load failed", busLoadError));
+      void loadMeitetsuNetwork().then(bumpDataLoadTick).catch((meitetsuLoadError) => console.error("meitetsu load failed", meitetsuLoadError));
+    });
     return () => cancelIdle(id);
   }, []);
 
@@ -345,6 +396,13 @@ export default function HomeScreen() {
     setPickerField(field);
     setStationQuery("");
     setStationLineFilter("all");
+    setStationKindFilter("rail");
+  }
+
+  function selectStationKindFilter(kind: StationKindFilter) {
+    setStationKindFilter(kind);
+    // 地下鉄・名鉄の路線チップは「停留所のみ」表示とは噛み合わず0件になってしまうため、切替時にリセットする。
+    if (kind === "bus") setStationLineFilter("all");
   }
 
   function selectStation(station: string) {
@@ -489,8 +547,8 @@ export default function HomeScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.topBar}>
           <View style={styles.brandLockup}>
-            <View style={styles.brandMark}><Image source={APP_ICON} style={styles.brandIcon} accessibilityLabel="名古屋市営地下鉄の乗換アイコン" /></View>
-            <Text style={styles.brandName}>NAGOYA SUBWAY</Text>
+            <View style={styles.brandMark}><Image source={APP_ICON} style={styles.brandIcon} accessibilityLabel="なごや乗換案内のアイコン" /></View>
+            <Text style={styles.brandName}>なごや乗換案内</Text>
           </View>
           <View style={styles.topActions}>
             <View style={styles.offlineStatus}>
@@ -505,7 +563,7 @@ export default function HomeScreen() {
 
         <View style={styles.intro}>
           <Text style={styles.introTitle}>次の列車を探す</Text>
-          <Text style={styles.introHint}>市営地下鉄の時刻表と乗換時間を端末内で検索します。</Text>
+          <Text style={styles.introHint}>地下鉄・バス・名鉄の時刻表と乗換時間を端末内で検索します。</Text>
         </View>
 
         <View style={[styles.routeCard, styles.glassPanel]}>
@@ -636,19 +694,40 @@ export default function HomeScreen() {
               <Text style={styles.sheetOverline}>{pickerField === "origin" ? "出発" : "到着"}</Text>
               <Text style={styles.sheetTitle}>駅を選択</Text>
             </View>
-            <Pressable style={styles.sheetClose} onPress={() => setPickerField(null)} accessibilityRole="button" accessibilityLabel="駅選択を閉じる"><Ionicons name="close" size={21} color={COLORS.ink} /></Pressable>
+            <View style={styles.sheetHeaderActions}>
+              <View style={styles.stationKindSegmented} accessibilityRole="tablist">
+                {STATION_KIND_SEQUENCE.map((kind) => {
+                  const active = stationKindFilter === kind;
+                  return (
+                    <Pressable
+                      key={kind}
+                      style={[styles.stationKindSegment, active && styles.stationKindSegmentActive]}
+                      onPress={() => selectStationKindFilter(kind)}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={STATION_KIND_META[kind].label}
+                    >
+                      <Ionicons name={STATION_KIND_META[kind].icon} size={17} color={active ? COLORS.navy : COLORS.lightMuted} />
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Pressable style={styles.sheetClose} onPress={() => setPickerField(null)} accessibilityRole="button" accessibilityLabel="駅選択を閉じる"><Ionicons name="close" size={21} color={COLORS.ink} /></Pressable>
+            </View>
           </View>
           <View style={styles.stationSearch}>
             <Ionicons name="search" size={18} color={COLORS.muted} />
             <TextInput value={stationQuery} onChangeText={setStationQuery} placeholder="駅名を入力" placeholderTextColor={COLORS.lightMuted} style={styles.stationSearchInput} autoFocus />
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.lineFilterScroll} contentContainerStyle={styles.lineFilterContent} keyboardShouldPersistTaps="handled">
-            <Pressable style={[styles.lineFilterChip, stationLineFilter === "all" && styles.lineFilterChipActive]} onPress={() => setStationLineFilter("all")} accessibilityRole="button" accessibilityState={{ selected: stationLineFilter === "all" }}><Text style={[styles.lineFilterText, stationLineFilter === "all" && styles.lineFilterTextActive]}>すべて</Text></Pressable>
-            {SUBWAY_LINES.map((line) => {
-              const active = stationLineFilter === line.id;
-              return <Pressable key={line.id} style={[styles.lineFilterChip, active && { borderColor: line.color, backgroundColor: `${line.color}18` }]} onPress={() => setStationLineFilter(line.id)} accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${line.name}で絞り込む`}><View style={[styles.lineFilterDot, { backgroundColor: line.color }]} /><Text style={[styles.lineFilterText, active && { color: COLORS.ink }]}>{line.name}</Text></Pressable>;
-            })}
-          </ScrollView>
+          {stationKindFilter !== "bus" && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.lineFilterScroll} contentContainerStyle={styles.lineFilterContent} keyboardShouldPersistTaps="handled">
+              <Pressable style={[styles.lineFilterChip, stationLineFilter === "all" && styles.lineFilterChipActive]} onPress={() => setStationLineFilter("all")} accessibilityRole="button" accessibilityState={{ selected: stationLineFilter === "all" }}><Text style={[styles.lineFilterText, stationLineFilter === "all" && styles.lineFilterTextActive]}>すべて</Text></Pressable>
+              {SUBWAY_LINES.map((line) => {
+                const active = stationLineFilter === line.id;
+                return <Pressable key={line.id} style={[styles.lineFilterChip, active && { borderColor: line.color, backgroundColor: `${line.color}18` }]} onPress={() => setStationLineFilter(line.id)} accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${line.name}で絞り込む`}><View style={[styles.lineFilterDot, { backgroundColor: line.color }]} /><Text style={[styles.lineFilterText, active && { color: COLORS.ink }]}>{line.name}</Text></Pressable>;
+              })}
+            </ScrollView>
+          )}
           <Text style={styles.stationCount}>{stationMatches.length} 駅を表示</Text>
           <FlatList
             data={stationMatches}
@@ -700,15 +779,15 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   appText: { fontFamily: "NotoSansJP", fontWeight: "400", letterSpacing: 0 },
   safeArea: { flex: 1, backgroundColor: COLORS.canvas }, content: { padding: 20, paddingBottom: 42 },
-  topBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, brandLockup: { flexDirection: "row", alignItems: "center", gap: 8 }, brandMark: { width: 34, height: 34, borderRadius: 11, overflow: "hidden", borderWidth: 1, borderColor: "rgba(18,117,187,0.28)", shadowColor: "#1B75BB", shadowOpacity: 0.16, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, brandIcon: { width: "100%", height: "100%" }, brandName: { color: COLORS.ink, fontWeight: "800", fontSize: 14 }, topActions: { flexDirection: "row", alignItems: "center", gap: 7 }, cacheRefreshButton: { width: 32, height: 32, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.84)", borderWidth: 1, borderColor: "rgba(18,117,187,0.18)" }, offlineStatus: { flexDirection: "row", alignItems: "center", gap: 4 }, offlineText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
+  topBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, brandLockup: { flexDirection: "row", alignItems: "center", gap: 8 }, brandMark: { width: 34, height: 34, borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: "rgba(18,117,187,0.28)", shadowColor: "#1B75BB", shadowOpacity: 0.16, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, brandIcon: { width: "100%", height: "100%" }, brandName: { color: COLORS.ink, fontWeight: "800", fontSize: 14 }, topActions: { flexDirection: "row", alignItems: "center", gap: 7 }, cacheRefreshButton: { width: 32, height: 32, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.84)", borderWidth: 1, borderColor: "rgba(18,117,187,0.18)" }, offlineStatus: { flexDirection: "row", alignItems: "center", gap: 4 }, offlineText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   intro: { marginTop: 30, marginBottom: 22 }, introEyebrow: { color: COLORS.teal, fontSize: 13, fontWeight: "800" }, introTitle: { color: COLORS.ink, fontSize: 31, lineHeight: 39, fontWeight: "800", marginTop: 4, letterSpacing: -0.6 }, introHint: { color: COLORS.muted, fontSize: 13, lineHeight: 19, marginTop: 7 },
-  glassPanel: { backgroundColor: "rgba(255,255,255,0.82)", borderColor: "rgba(18,117,187,0.16)", shadowColor: "#1B75BB", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, routeCard: { position: "relative", borderWidth: 1, borderColor: COLORS.border, borderRadius: 18, backgroundColor: COLORS.surface, padding: 10 }, routeFields: { gap: 0 }, routeFieldRow: { minHeight: 60, flexDirection: "row", alignItems: "center" }, routeField: { flex: 1, minHeight: 60, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 7 }, fieldInlineClear: { width: 34, height: 34, marginRight: 4, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "rgba(11,91,149,0.06)" }, routeFieldCopy: { flex: 1 }, routeLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, routeValue: { color: COLORS.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }, routePlaceholder: { color: COLORS.lightMuted, fontWeight: "600" }, marker: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border, overflow: "hidden" }, originMarker: { backgroundColor: COLORS.surface }, destinationMarker: { backgroundColor: COLORS.surface }, markerInnerDot: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8 }, splitMarker: { borderColor: "transparent" }, markerDiagonalBase: { position: "absolute", top: 0, left: 0, width: 30, height: 30 }, markerDiagonalOverlay: { position: "absolute", top: 0, left: 0, width: 30, height: 30 }, markerIconBadge: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8, backgroundColor: COLORS.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border }, routeConnectorRow: { height: 8, paddingLeft: 21 }, routeConnector: { height: 8, borderLeftWidth: 2, borderLeftColor: "rgba(18,117,187,0.16)" }, swapButton: { position: "absolute", left: 17, top: 59, width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.96)", borderWidth: 1, borderColor: "rgba(18,117,187,0.22)" },
-  departureRow: { marginTop: 13, minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 13, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, departureIcon: { width: 31, height: 31, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(31,150,210,0.11)", borderWidth: 1, borderColor: "rgba(31,150,210,0.18)" }, departureCopy: { flex: 1 }, departureLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, departureValue: { color: COLORS.ink, fontSize: 14, fontWeight: "800", marginTop: 2 }, changeText: { color: COLORS.blue, fontSize: 12, fontWeight: "800" }, historyPanel: { marginTop: 13, borderRadius: 16, padding: 10 }, historyHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4, paddingBottom: 6 }, historyTitleWrap: { flexDirection: "row", alignItems: "center", gap: 6 }, historyTitle: { color: COLORS.ink, fontSize: 12, fontWeight: "800" }, historyRow: { minHeight: 48, flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "rgba(18,117,187,0.09)" }, historyEntry: { flex: 1, minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 4 }, historyRouteIcon: { width: 24, height: 24, alignItems: "center", justifyContent: "center", borderRadius: 8, backgroundColor: "rgba(11,91,149,0.08)" }, historyCopy: { flex: 1 }, historyRoute: { color: COLORS.ink, fontSize: 13, fontWeight: "700" }, historyArrow: { color: COLORS.teal }, historyMeta: { color: COLORS.muted, fontSize: 10, marginTop: 1 }, historyDelete: { width: 34, height: 34, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  errorText: { color: COLORS.danger, marginTop: 12, fontSize: 12, fontWeight: "700" }, primaryButton: { minHeight: 56, borderRadius: 15, marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, backgroundColor: COLORS.navy, shadowColor: "#1B75BB", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3 }, primaryButtonLoading: { opacity: 0.78 }, searchIconTile: { width: 28, height: 28, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#1B75BB", borderWidth: 1, borderColor: "rgba(245,196,0,0.72)" }, primaryButtonText: { color: COLORS.surface, fontSize: 16, fontWeight: "800" },
+  glassPanel: { backgroundColor: "rgba(255,255,255,0.82)", borderColor: "rgba(18,117,187,0.16)", shadowColor: "#1B75BB", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, routeCard: { position: "relative", borderWidth: 1, borderColor: COLORS.border, borderRadius: 18, backgroundColor: COLORS.surface, padding: 10 }, routeFields: { gap: 0 }, routeFieldRow: { minHeight: 60, flexDirection: "row", alignItems: "center" }, routeField: { flex: 1, minHeight: 60, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 7 }, fieldInlineClear: { width: 34, height: 34, marginRight: 4, alignItems: "center", justifyContent: "center", borderRadius: 14, backgroundColor: "rgba(11,91,149,0.06)" }, routeFieldCopy: { flex: 1 }, routeLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, routeValue: { color: COLORS.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }, routePlaceholder: { color: COLORS.lightMuted, fontWeight: "600" }, marker: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border, overflow: "hidden" }, originMarker: { backgroundColor: COLORS.surface }, destinationMarker: { backgroundColor: COLORS.surface }, markerInnerDot: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8 }, splitMarker: { borderColor: "transparent" }, markerDiagonalBase: { position: "absolute", top: 0, left: 0, width: 30, height: 30 }, markerDiagonalOverlay: { position: "absolute", top: 0, left: 0, width: 30, height: 30 }, markerIconBadge: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8, backgroundColor: COLORS.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border }, routeConnectorRow: { height: 8, paddingLeft: 21 }, routeConnector: { height: 8, borderLeftWidth: 2, borderLeftColor: "rgba(18,117,187,0.16)" }, swapButton: { position: "absolute", left: 17, top: 59, width: 30, height: 30, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.96)", borderWidth: 1, borderColor: "rgba(18,117,187,0.22)" },
+  departureRow: { marginTop: 13, minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 13, borderRadius: 18, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, departureIcon: { width: 31, height: 31, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(31,150,210,0.11)", borderWidth: 1, borderColor: "rgba(31,150,210,0.18)" }, departureCopy: { flex: 1 }, departureLabel: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, departureValue: { color: COLORS.ink, fontSize: 14, fontWeight: "800", marginTop: 2 }, changeText: { color: COLORS.blue, fontSize: 12, fontWeight: "800" }, historyPanel: { marginTop: 13, borderRadius: 16, padding: 10 }, historyHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4, paddingBottom: 6 }, historyTitleWrap: { flexDirection: "row", alignItems: "center", gap: 6 }, historyTitle: { color: COLORS.ink, fontSize: 12, fontWeight: "800" }, historyRow: { minHeight: 48, flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "rgba(18,117,187,0.09)" }, historyEntry: { flex: 1, minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 4 }, historyRouteIcon: { width: 24, height: 24, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "rgba(11,91,149,0.08)" }, historyCopy: { flex: 1 }, historyRoute: { color: COLORS.ink, fontSize: 13, fontWeight: "700" }, historyArrow: { color: COLORS.teal }, historyMeta: { color: COLORS.muted, fontSize: 10, marginTop: 1 }, historyDelete: { width: 34, height: 34, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  errorText: { color: COLORS.danger, marginTop: 12, fontSize: 12, fontWeight: "700" }, primaryButton: { minHeight: 56, borderRadius: 18, marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, backgroundColor: COLORS.navy, shadowColor: "#1B75BB", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3 }, primaryButtonLoading: { opacity: 0.78 }, searchIconTile: { width: 28, height: 28, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "#1B75BB", borderWidth: 1, borderColor: "rgba(245,196,0,0.72)" }, primaryButtonText: { color: COLORS.surface, fontSize: 16, fontWeight: "800" },
   searchHint: { marginTop: 14, color: COLORS.muted, fontSize: 11, textAlign: "center" },
-  resultArea: { marginTop: 28 }, routePreferenceGroup: { flexDirection: "row", padding: 3, borderRadius: 16, marginBottom: 15 }, routePreferenceButton: { flex: 1, minHeight: 72, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, borderRadius: 13 }, routePreferenceButtonActive: { backgroundColor: "rgba(11,91,149,0.09)", borderWidth: 1, borderColor: "rgba(11,91,149,0.24)" }, routePreferenceLabel: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, routePreferenceLabelActive: { color: COLORS.navy }, routePreferenceMeta: { color: COLORS.ink, fontSize: 12, fontWeight: "700", marginTop: 2 }, routePreferenceMetaActive: { color: COLORS.navy }, routePreferenceHint: { color: COLORS.muted, fontSize: 9, marginTop: 2 }, routePreferenceHintActive: { color: COLORS.teal }, alternativeGroup: { flexDirection: "row", gap: 8, marginBottom: 12 }, alternativeChip: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface }, alternativeChipActive: { borderColor: COLORS.navy, backgroundColor: "rgba(11,91,149,0.08)" }, alternativeChipText: { color: COLORS.muted, fontSize: 12, fontWeight: "700" }, alternativeChipTextActive: { color: COLORS.navy }, resultOverline: { color: "#5E5144", fontSize: 12, fontWeight: "800", marginBottom: 9 }, resultHero: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, resultDeparture: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", letterSpacing: -0.7 }, resultArrival: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", textAlign: "right", letterSpacing: -0.7 }, resultPlace: { color: COLORS.muted, fontSize: 13, fontWeight: "700", marginTop: 3 }, resultArrowWrap: { alignItems: "center", gap: 1 }, resultDuration: { color: COLORS.navy, fontSize: 13, fontWeight: "800" }, resultTransfer: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, resultArrivalWrap: { alignItems: "flex-end" }, routeSteps: { marginTop: 18, gap: 8 }, routeLegSummary: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, routeLegColor: { width: 4, alignSelf: "stretch", borderRadius: 3 }, routeLegCopy: { flex: 1 }, routeLegHeading: { flexDirection: "row", alignItems: "center", gap: 8 }, linePill: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 }, linePillText: { fontSize: 11, fontWeight: "800" }, routeLegDirection: { flex: 1, color: COLORS.ink, fontSize: 14, fontWeight: "800" }, routeLegMeta: { color: COLORS.muted, fontSize: 11, marginTop: 5 }, routeTransferSummary: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderLeftWidth: 1, borderRightWidth: 1, borderColor: COLORS.border }, routeTransferText: { flex: 1, color: COLORS.muted, fontSize: 11, fontWeight: "700" }, detailToggle: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginTop: 8 }, detailToggleText: { color: COLORS.navy, fontSize: 13, fontWeight: "800" },
-  detailList: { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 12 }, detailLeg: { flexDirection: "row", minHeight: 72, gap: 9 }, detailLine: { width: 4, borderRadius: 2 }, detailTimes: { justifyContent: "space-between", paddingVertical: 1 }, detailTime: { color: COLORS.ink, fontSize: 13, fontWeight: "800" }, detailCopy: { flex: 1, justifyContent: "space-between", paddingBottom: 2 }, detailStation: { color: COLORS.ink, fontSize: 14, fontWeight: "800" }, detailDirection: { color: COLORS.muted, fontSize: 11 }, detailTransfer: { flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 8 }, detailConnector: { width: 4, height: 14, borderRadius: 2, backgroundColor: COLORS.amber }, detailTransferText: { color: "#81510D", fontSize: 11, fontWeight: "700" }, detailFooter: { marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: COLORS.border, flexDirection: "row", justifyContent: "space-between" }, detailFooterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
-  dataRow: { marginTop: 27, minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 }, dataRowText: { flex: 1, color: COLORS.muted, fontSize: 12, fontWeight: "700" }, dataDetail: { paddingTop: 3, paddingBottom: 3 }, dataRevisionText: { color: COLORS.navy, fontSize: 10, lineHeight: 15, marginVertical: 8, fontWeight: "700" }, dataPrivacyText: { color: COLORS.muted, fontSize: 10, lineHeight: 15 }, dialogBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: "rgba(18,27,35,0.28)" }, cacheDialog: { width: "100%", maxWidth: 360, padding: 22, borderRadius: 22, alignItems: "center", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "rgba(18,117,187,0.16)", shadowColor: "#0B5B95", shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 8 }, cacheDialogIcon: { width: 44, height: 44, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11,91,149,0.09)" }, cacheDialogTitle: { color: COLORS.ink, fontSize: 18, fontWeight: "800", marginTop: 14 }, cacheDialogText: { color: COLORS.muted, fontSize: 13, lineHeight: 20, textAlign: "center", marginTop: 8 }, cacheDialogHint: { color: COLORS.lightMuted, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: 5 }, cacheDialogActions: { width: "100%", flexDirection: "row", gap: 9, marginTop: 21 }, cacheDialogCancel: { flex: 1, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: COLORS.border }, cacheDialogCancelText: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, cacheDialogConfirm: { flex: 1.35, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: COLORS.navy }, cacheDialogConfirmDisabled: { opacity: 0.7 }, cacheDialogConfirmText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
-  sheetScreen: { flex: 1, backgroundColor: COLORS.canvas }, sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 17, backgroundColor: COLORS.surface }, sheetOverline: { color: COLORS.teal, fontSize: 11, fontWeight: "800" }, sheetTitle: { color: COLORS.ink, fontSize: 24, fontWeight: "800", marginTop: 3 }, sheetClose: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.elevated }, stationSearch: { margin: 16, minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderRadius: 15, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, stationSearchInput: { flex: 1, color: COLORS.ink, fontFamily: "NotoSansJP", fontSize: 15, paddingVertical: 9 }, lineFilterScroll: { maxHeight: 42, marginBottom: 8 }, lineFilterContent: { paddingHorizontal: 16, gap: 8 }, lineFilterChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface }, lineFilterChipActive: { borderColor: COLORS.navy, backgroundColor: "rgba(11,91,149,0.08)" }, lineFilterDot: { width: 7, height: 7, borderRadius: 4 }, lineFilterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, lineFilterTextActive: { color: COLORS.navy }, stationCount: { color: COLORS.muted, marginHorizontal: 20, marginBottom: 7, fontSize: 12 }, stationList: { paddingHorizontal: 16, paddingBottom: 28 }, stationOption: { minHeight: 55, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border }, stationOptionDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.teal }, stationOptionText: { flex: 1, color: COLORS.ink, fontSize: 16, fontWeight: "700" }, emptyStationText: { color: COLORS.muted, textAlign: "center", padding: 30 },
-  nowButton: { alignSelf: "flex-start", margin: 20, marginBottom: 7, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, nowButtonText: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, optionSection: { marginHorizontal: 20, marginTop: 18 }, optionHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, optionLabel: { color: COLORS.ink, fontSize: 13, fontWeight: "800" }, autoText: { color: COLORS.muted, fontSize: 11, fontWeight: "800" }, optionInput: { minHeight: 50, marginTop: 9, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, borderRadius: 14, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, optionTextInput: { flex: 1, color: COLORS.ink, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700", paddingVertical: 8 }, segmented: { marginTop: 9, padding: 3, flexDirection: "row", borderRadius: 14, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, segment: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 11 }, segmentActive: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, segmentText: { color: COLORS.muted, fontSize: 13, fontWeight: "700" }, segmentTextActive: { color: COLORS.navy }, optionHint: { color: COLORS.muted, fontSize: 11, lineHeight: 16, marginTop: 8 }, applyButton: { minHeight: 54, marginHorizontal: 20, marginTop: 29, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: COLORS.navy }, applyButtonText: { color: COLORS.surface, fontSize: 16, fontWeight: "800" },
+  resultArea: { marginTop: 28 }, routePreferenceGroup: { flexDirection: "row", padding: 3, borderRadius: 16, marginBottom: 15 }, routePreferenceButton: { flex: 1, minHeight: 72, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, borderRadius: 14 }, routePreferenceButtonActive: { backgroundColor: "rgba(11,91,149,0.09)", borderWidth: 1, borderColor: "rgba(11,91,149,0.24)" }, routePreferenceLabel: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, routePreferenceLabelActive: { color: COLORS.navy }, routePreferenceMeta: { color: COLORS.ink, fontSize: 12, fontWeight: "700", marginTop: 2 }, routePreferenceMetaActive: { color: COLORS.navy }, routePreferenceHint: { color: COLORS.muted, fontSize: 9, marginTop: 2 }, routePreferenceHintActive: { color: COLORS.teal }, alternativeGroup: { flexDirection: "row", gap: 8, marginBottom: 12 }, alternativeChip: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 14, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface }, alternativeChipActive: { borderColor: COLORS.navy, backgroundColor: "rgba(11,91,149,0.08)" }, alternativeChipText: { color: COLORS.muted, fontSize: 12, fontWeight: "700" }, alternativeChipTextActive: { color: COLORS.navy }, resultOverline: { color: "#5E5144", fontSize: 12, fontWeight: "800", marginBottom: 9 }, resultHero: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, resultDeparture: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", letterSpacing: -0.7 }, resultArrival: { color: COLORS.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", textAlign: "right", letterSpacing: -0.7 }, resultPlace: { color: COLORS.muted, fontSize: 13, fontWeight: "700", marginTop: 3 }, resultArrowWrap: { alignItems: "center", gap: 1 }, resultDuration: { color: COLORS.navy, fontSize: 13, fontWeight: "800" }, resultTransfer: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, resultArrivalWrap: { alignItems: "flex-end" }, routeSteps: { marginTop: 18, gap: 8 }, routeLegSummary: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, routeLegColor: { width: 4, alignSelf: "stretch", borderRadius: 3 }, routeLegCopy: { flex: 1 }, routeLegHeading: { flexDirection: "row", alignItems: "center", gap: 8 }, linePill: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 10 }, linePillText: { fontSize: 11, fontWeight: "800" }, routeLegDirection: { flex: 1, color: COLORS.ink, fontSize: 14, fontWeight: "800" }, routeLegMeta: { color: COLORS.muted, fontSize: 11, marginTop: 5 }, routeTransferSummary: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderLeftWidth: 1, borderRightWidth: 1, borderColor: COLORS.border }, routeTransferText: { flex: 1, color: COLORS.muted, fontSize: 11, fontWeight: "700" }, walkLegSummary: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 15, backgroundColor: "rgba(36,110,141,0.06)", borderWidth: 1, borderColor: "rgba(36,110,141,0.18)", borderStyle: "dashed" }, walkLegText: { flex: 1, color: COLORS.teal, fontSize: 12, fontWeight: "700" }, detailToggle: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginTop: 8 }, detailToggleText: { color: COLORS.navy, fontSize: 13, fontWeight: "800" },
+  detailList: { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 12 }, detailLeg: { flexDirection: "row", minHeight: 72, gap: 9 }, detailLine: { width: 4, borderRadius: 2 }, detailLineWalk: { backgroundColor: COLORS.lightMuted }, detailTimes: { justifyContent: "space-between", paddingVertical: 1 }, detailTime: { color: COLORS.ink, fontSize: 13, fontWeight: "800" }, detailCopy: { flex: 1, justifyContent: "space-between", paddingBottom: 2 }, detailStation: { color: COLORS.ink, fontSize: 14, fontWeight: "800" }, detailDirection: { color: COLORS.muted, fontSize: 11 }, detailTransfer: { flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 8 }, detailConnector: { width: 4, height: 14, borderRadius: 2, backgroundColor: COLORS.amber }, detailTransferText: { color: "#81510D", fontSize: 11, fontWeight: "700" }, detailFooter: { marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: COLORS.border, flexDirection: "row", justifyContent: "space-between" }, detailFooterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
+  dataRow: { marginTop: 27, minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 }, dataRowText: { flex: 1, color: COLORS.muted, fontSize: 12, fontWeight: "700" }, dataDetail: { paddingTop: 3, paddingBottom: 3 }, dataRevisionText: { color: COLORS.navy, fontSize: 10, lineHeight: 15, marginVertical: 8, fontWeight: "700" }, dataPrivacyText: { color: COLORS.muted, fontSize: 10, lineHeight: 15 }, dialogBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: "rgba(18,27,35,0.28)" }, cacheDialog: { width: "100%", maxWidth: 360, padding: 22, borderRadius: 22, alignItems: "center", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "rgba(18,117,187,0.16)", shadowColor: "#0B5B95", shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 8 }, cacheDialogIcon: { width: 44, height: 44, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11,91,149,0.09)" }, cacheDialogTitle: { color: COLORS.ink, fontSize: 18, fontWeight: "800", marginTop: 14 }, cacheDialogText: { color: COLORS.muted, fontSize: 13, lineHeight: 20, textAlign: "center", marginTop: 8 }, cacheDialogHint: { color: COLORS.lightMuted, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: 5 }, cacheDialogActions: { width: "100%", flexDirection: "row", gap: 9, marginTop: 21 }, cacheDialogCancel: { flex: 1, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: COLORS.border }, cacheDialogCancelText: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, cacheDialogConfirm: { flex: 1.35, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: COLORS.navy }, cacheDialogConfirmDisabled: { opacity: 0.7 }, cacheDialogConfirmText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
+  sheetScreen: { flex: 1, backgroundColor: COLORS.canvas }, sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 17, backgroundColor: COLORS.surface }, sheetOverline: { color: COLORS.teal, fontSize: 11, fontWeight: "800" }, sheetTitle: { color: COLORS.ink, fontSize: 24, fontWeight: "800", marginTop: 3 }, sheetClose: { width: 38, height: 38, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: COLORS.elevated }, sheetHeaderActions: { flexDirection: "row", alignItems: "center", gap: 8 }, stationKindSegmented: { flexDirection: "row", padding: 3, borderRadius: 15, backgroundColor: "rgba(11,91,149,0.07)", borderWidth: 1, borderColor: "rgba(11,91,149,0.16)" }, stationKindSegment: { width: 32, height: 32, borderRadius: 12, alignItems: "center", justifyContent: "center" }, stationKindSegmentActive: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: "rgba(11,91,149,0.28)" }, stationSearch: { margin: 16, minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, stationSearchInput: { flex: 1, color: COLORS.ink, fontFamily: "NotoSansJP", fontSize: 15, paddingVertical: 9 }, lineFilterScroll: { height: 42, flexShrink: 0, marginBottom: 8 }, lineFilterContent: { paddingHorizontal: 16, gap: 8 }, lineFilterChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surface }, lineFilterChipActive: { borderColor: COLORS.navy, backgroundColor: "rgba(11,91,149,0.08)" }, lineFilterDot: { width: 7, height: 7, borderRadius: 4 }, lineFilterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" }, lineFilterTextActive: { color: COLORS.navy }, stationCount: { color: COLORS.muted, marginHorizontal: 20, marginBottom: 7, fontSize: 12 }, stationList: { paddingHorizontal: 16, paddingBottom: 28 }, stationOption: { minHeight: 55, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border }, stationOptionDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.teal }, stationOptionText: { flex: 1, color: COLORS.ink, fontSize: 16, fontWeight: "700" }, emptyStationText: { color: COLORS.muted, textAlign: "center", padding: 30 },
+  nowButton: { alignSelf: "flex-start", margin: 20, marginBottom: 7, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 13, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, nowButtonText: { color: COLORS.muted, fontSize: 13, fontWeight: "800" }, optionSection: { marginHorizontal: 20, marginTop: 18 }, optionHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, optionLabel: { color: COLORS.ink, fontSize: 13, fontWeight: "800" }, autoText: { color: COLORS.muted, fontSize: 11, fontWeight: "800" }, optionInput: { minHeight: 50, marginTop: 9, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, borderRadius: 15, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, optionTextInput: { flex: 1, color: COLORS.ink, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700", paddingVertical: 8 }, segmented: { marginTop: 9, padding: 3, flexDirection: "row", borderRadius: 15, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, segment: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 12 }, segmentActive: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }, segmentText: { color: COLORS.muted, fontSize: 13, fontWeight: "700" }, segmentTextActive: { color: COLORS.navy }, optionHint: { color: COLORS.muted, fontSize: 11, lineHeight: 16, marginTop: 8 }, applyButton: { minHeight: 54, marginHorizontal: 20, marginTop: 29, alignItems: "center", justifyContent: "center", borderRadius: 18, backgroundColor: COLORS.navy }, applyButtonText: { color: COLORS.surface, fontSize: 16, fontWeight: "800" },
 });

@@ -1,7 +1,7 @@
 {
-  "name": "なごや地下鉄オフライン案内",
-  "short_name": "地下鉄案内",
-  "description": "名古屋市営地下鉄の時刻表と乗換時間を考慮するオフライン乗換案内",
+  "name": "なごや乗換案内",
+  "short_name": "乗換案内",
+  "description": "名古屋市営地下鉄・名古屋市バス・名鉄の時刻表と乗換時間を考慮するオフライン乗換案内",
   "lang": "ja",
   "display": "standalone",
   "start_url": "/",
