@@ -268,7 +268,7 @@ async function loadExternalNetwork(urlBase: string, lineColor: string): Promise<
 }
 
 let busNetworkPromise: Promise<void> | undefined;
-const BUS_LINE_COLOR = "#2E9E5B";
+export const BUS_LINE_COLOR = "#2E9E5B";
 
 /** 名古屋市バスのGTFS-JPから生成した実データ（駅×方向×平日/休日の発車時刻）を取り込む。 */
 export function loadBusNetwork(): Promise<void> {
