@@ -9,9 +9,7 @@ export default function Root({ children }: PropsWithChildren) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFFFFF" />
-        <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1F1C19" />
-        <style>{`@media (prefers-color-scheme: dark) { body { background-color: #1F1C19; } }`}</style>
+        <meta name="theme-color" content="#FFFFFF" />
         <meta name="description" content="名古屋市営地下鉄・名古屋市バス・名鉄の時刻表と乗換時間を考慮するオフライン乗換案内" />
         <link rel="manifest" href="/manifest.json" />
         <ScrollViewStyleReset />

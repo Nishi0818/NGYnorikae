@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
-import { Animated, Pressable, StyleSheet, Text, View, useColorScheme } from "react-native";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 
 type Props = {
   kind: "date" | "time";
@@ -8,40 +8,10 @@ type Props = {
   onChange: (value: string) => void;
 };
 
-const LIGHT = {
-  ink: "#37312B",
-  navy: "#0B5B95",
-  muted: "#6D625A",
-  border: "#ECECEC",
-  surface: "#FFFFFF",
-  chipBg: "rgba(11,91,149,0.06)",
-  chipBorder: "rgba(11,91,149,0.12)",
-  softBg: "rgba(11,91,149,0.07)",
-  softBorder: "rgba(11,91,149,0.16)",
-  onNavy: "#FFFFFF",
-};
-
-const DARK: typeof LIGHT = {
-  ink: "#F0EAE1",
-  navy: "#6FB3E8",
-  muted: "#ADA294",
-  border: "#3B372F",
-  surface: "#292622",
-  chipBg: "rgba(111,179,232,0.10)",
-  chipBorder: "rgba(111,179,232,0.22)",
-  softBg: "rgba(111,179,232,0.10)",
-  softBorder: "rgba(111,179,232,0.25)",
-  onNavy: "#17212B",
-};
-
-function usePalette() {
-  return useColorScheme() === "dark" ? DARK : LIGHT;
-}
-
-function useFieldStyles() {
-  return useColorScheme() === "dark" ? darkStyles : lightStyles;
-}
-
+const INK = "#37312B";
+const NAVY = "#0B5B95";
+const MUTED = "#6D625A";
+const BORDER = "#ECECEC";
 const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"] as const;
 const MINUTE_STEPS = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
 
@@ -76,8 +46,6 @@ function displayValue(kind: "date" | "time", value: string) {
  * 時刻は「時」と「分」のチップ、日付はカレンダーから選択する。
  */
 export function DateTimeField({ kind, value, onChange }: Props) {
-  const styles = useFieldStyles();
-  const colors = usePalette();
   const [open, setOpen] = useState(false);
   const panelProgress = useRef(new Animated.Value(0)).current;
   const parsedDate = parseDate(value);
@@ -105,9 +73,9 @@ export function DateTimeField({ kind, value, onChange }: Props) {
         accessibilityState={{ expanded: open }}
         accessibilityLabel={`${kind === "date" ? "日付" : "時刻"}: ${displayValue(kind, value)}`}
       >
-        <Ionicons name={kind === "date" ? "calendar-outline" : "time-outline"} size={18} color={colors.navy} />
+        <Ionicons name={kind === "date" ? "calendar-outline" : "time-outline"} size={18} color={NAVY} />
         <Text style={styles.fieldValue}>{displayValue(kind, value)}</Text>
-        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={colors.muted} />
+        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={MUTED} />
       </Pressable>
       {open && (
         <Animated.View style={[styles.panel, { opacity: panelProgress, transform: [{ translateY: panelProgress.interpolate({ inputRange: [0, 1], outputRange: [-4, 0] }) }] }]}>
@@ -130,7 +98,6 @@ export function DateTimeField({ kind, value, onChange }: Props) {
 }
 
 function TimePanel({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const styles = useFieldStyles();
   const { hour, minute } = parseTime(value);
   const setPart = (nextHour: number, nextMinute: number) => onChange(`${pad(nextHour)}:${pad(nextMinute)}`);
   const shiftMinutes = (delta: number) => {
@@ -175,8 +142,6 @@ function DatePanel({ value, viewYear, viewMonth, onNavigate, onSelect }: {
   onNavigate: (year: number, month: number) => void;
   onSelect: (value: string) => void;
 }) {
-  const styles = useFieldStyles();
-  const colors = usePalette();
   const selected = parseDate(value);
   const today = new Date();
   const firstWeekday = new Date(viewYear, viewMonth - 1, 1).getDay();
@@ -190,11 +155,11 @@ function DatePanel({ value, viewYear, viewMonth, onNavigate, onSelect }: {
     <View>
       <View style={styles.monthHeader}>
         <Pressable style={({ pressed }) => [styles.monthNav, pressed && styles.fieldPressed]} onPress={() => move(-1)} accessibilityRole="button" accessibilityLabel="前の月">
-          <Ionicons name="chevron-back" size={17} color={colors.navy} />
+          <Ionicons name="chevron-back" size={17} color={NAVY} />
         </Pressable>
         <Text style={styles.monthTitle}>{viewYear}年{viewMonth}月</Text>
         <Pressable style={({ pressed }) => [styles.monthNav, pressed && styles.fieldPressed]} onPress={() => move(1)} accessibilityRole="button" accessibilityLabel="次の月">
-          <Ionicons name="chevron-forward" size={17} color={colors.navy} />
+          <Ionicons name="chevron-forward" size={17} color={NAVY} />
         </Pressable>
       </View>
       <View style={styles.weekHeader}>
@@ -222,37 +187,32 @@ function DatePanel({ value, viewYear, viewMonth, onNavigate, onSelect }: {
   );
 }
 
-function createStyles(C: typeof LIGHT) {
-  return StyleSheet.create({
-    field: { minHeight: 50, marginTop: 9, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, borderRadius: 15, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border },
-    fieldPressed: { opacity: 0.75, transform: [{ scale: 0.98 }] },
-    fieldValue: { flex: 1, color: C.ink, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700", paddingVertical: 8 },
-    panel: { marginTop: 8, padding: 13, borderRadius: 15, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border },
-    panelLabel: { color: C.muted, fontSize: 11, fontWeight: "800", marginTop: 6, marginBottom: 7 },
-    chipGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-    chip: { width: "15%", minHeight: 34, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: C.chipBg, borderWidth: 1, borderColor: C.chipBorder },
-    chipActive: { backgroundColor: C.navy, borderColor: C.navy },
-    chipText: { color: C.ink, fontSize: 13, fontWeight: "700" },
-    chipTextActive: { color: C.onNavy },
-    fineRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
-    fineButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 11, backgroundColor: C.softBg, borderWidth: 1, borderColor: C.softBorder },
-    fineButtonText: { color: C.navy, fontSize: 12, fontWeight: "800" },
-    fineValue: { flex: 1, textAlign: "center", color: C.ink, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "800" },
-    monthHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
-    monthNav: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: C.softBg },
-    monthTitle: { color: C.ink, fontSize: 14, fontWeight: "800" },
-    weekHeader: { flexDirection: "row" },
-    weekHeaderText: { width: "14.28%", textAlign: "center", color: C.muted, fontSize: 11, fontWeight: "700", paddingVertical: 4 },
-    dayGrid: { flexDirection: "row", flexWrap: "wrap" },
-    dayCell: { width: "14.28%", aspectRatio: 1, maxHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 10 },
-    dayCellToday: { borderWidth: 1, borderColor: C.navy },
-    dayCellSelected: { backgroundColor: C.navy },
-    dayText: { color: C.ink, fontSize: 13, fontWeight: "700" },
-    dayTextSelected: { color: C.onNavy },
-    closeRow: { alignSelf: "flex-end", marginTop: 10, paddingHorizontal: 10, paddingVertical: 5 },
-    closeText: { color: C.navy, fontSize: 12, fontWeight: "800" },
-  });
-}
-
-const lightStyles = createStyles(LIGHT);
-const darkStyles = createStyles(DARK);
+const styles = StyleSheet.create({
+  field: { minHeight: 50, marginTop: 9, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, borderRadius: 15, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: BORDER },
+  fieldPressed: { opacity: 0.75, transform: [{ scale: 0.98 }] },
+  fieldValue: { flex: 1, color: INK, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700", paddingVertical: 8 },
+  panel: { marginTop: 8, padding: 13, borderRadius: 15, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: BORDER },
+  panelLabel: { color: MUTED, fontSize: 11, fontWeight: "800", marginTop: 6, marginBottom: 7 },
+  chipGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  chip: { width: "15%", minHeight: 34, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "rgba(11,91,149,0.06)", borderWidth: 1, borderColor: "rgba(11,91,149,0.12)" },
+  chipActive: { backgroundColor: NAVY, borderColor: NAVY },
+  chipText: { color: INK, fontSize: 13, fontWeight: "700" },
+  chipTextActive: { color: "#FFFFFF" },
+  fineRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
+  fineButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 11, backgroundColor: "rgba(11,91,149,0.07)", borderWidth: 1, borderColor: "rgba(11,91,149,0.16)" },
+  fineButtonText: { color: NAVY, fontSize: 12, fontWeight: "800" },
+  fineValue: { flex: 1, textAlign: "center", color: INK, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "800" },
+  monthHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  monthNav: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "rgba(11,91,149,0.07)" },
+  monthTitle: { color: INK, fontSize: 14, fontWeight: "800" },
+  weekHeader: { flexDirection: "row" },
+  weekHeaderText: { width: "14.28%", textAlign: "center", color: MUTED, fontSize: 11, fontWeight: "700", paddingVertical: 4 },
+  dayGrid: { flexDirection: "row", flexWrap: "wrap" },
+  dayCell: { width: "14.28%", aspectRatio: 1, maxHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 10 },
+  dayCellToday: { borderWidth: 1, borderColor: NAVY },
+  dayCellSelected: { backgroundColor: NAVY },
+  dayText: { color: INK, fontSize: 13, fontWeight: "700" },
+  dayTextSelected: { color: "#FFFFFF" },
+  closeRow: { alignSelf: "flex-end", marginTop: 10, paddingHorizontal: 10, paddingVertical: 5 },
+  closeText: { color: NAVY, fontSize: 12, fontWeight: "800" },
+});
