@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>diag</title>
+</head>
+<body>
+<div id="log" style="font-family:monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;">DIAG START</div>
+<div id="root"></div>
+<script>
+var logEl = document.getElementById('log');
+function log(m) { logEl.textContent += '\n| ' + m; }
+window.addEventListener('error', function (e) {
+  log('ERROR: ' + (e.message || e.type) + ' @ ' + (e.filename || '') + ':' + (e.lineno || ''));
+}, true);
+window.addEventListener('unhandledrejection', function (e) {
+  var r = e.reason;
+  log('REJECTION: ' + (r && (r.stack || r.message) ? (r.stack || r.message) : String(r)).slice(0, 500));
+});
+var origErr = console.error;
+console.error = function () {
+  var parts = [];
+  for (var i = 0; i < arguments.length; i++) {
+    var x = arguments[i];
+    try { parts.push(typeof x === 'string' ? x : ((x && (x.stack || x.message)) || JSON.stringify(x))); }
+    catch (err) { parts.push(String(x)); }
+  }
+  log('console.error: ' + parts.join(' ').slice(0, 500));
+  return origErr.apply(console, arguments);
+};
+log('trap installed');
+</script>
+<script src="/_expo/static/js/web/entry-5319df15046c7f3106c3e253a71eb59e.js" defer></script>
+<script>
+window.addEventListener('load', function () {
+  setTimeout(function () {
+    var root = document.getElementById('root');
+    log('after 3s: root children=' + root.childNodes.length + ', root html len=' + root.innerHTML.length);
+  }, 3000);
+  setTimeout(function () {
+    var root = document.getElementById('root');
+    log('after 8s: root children=' + root.childNodes.length + ', root html len=' + root.innerHTML.length + ', body text=' + document.body.innerText.slice(0, 200));
+  }, 8000);
+});
+</script>
+</body>
+</html>
