@@ -1,4 +1,6 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useEffect, useRef, useState } from "react";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 
 type Props = {
   kind: "date" | "time";
@@ -6,64 +8,211 @@ type Props = {
   onChange: (value: string) => void;
 };
 
+const INK = "#37312B";
+const NAVY = "#0B5B95";
+const MUTED = "#6D625A";
+const BORDER = "#ECECEC";
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"] as const;
+const MINUTE_STEPS = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+
 function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-function shiftDate(value: string, days: number) {
+function parseDate(value: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  const base = match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : new Date();
-  base.setDate(base.getDate() + days);
-  return `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())}`;
+  if (!match) { const now = new Date(); return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() }; }
+  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
 }
 
-function shiftTime(value: string, minutes: number) {
+function parseTime(value: string) {
   const match = /^(\d{2}):(\d{2})$/.exec(value);
-  const total = match ? Number(match[1]) * 60 + Number(match[2]) : 0;
-  const next = ((total + minutes) % 1440 + 1440) % 1440;
-  return `${pad(Math.floor(next / 60))}:${pad(next % 60)}`;
+  return match ? { hour: Number(match[1]), minute: Number(match[2]) } : { hour: 0, minute: 0 };
+}
+
+function formatDateValue(year: number, month: number, day: number) {
+  return `${year}-${pad(month)}-${pad(day)}`;
 }
 
 function displayValue(kind: "date" | "time", value: string) {
-  if (kind === "date") {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-    return match ? `${match[1]}年${Number(match[2])}月${Number(match[3])}日` : value;
-  }
-  return value;
+  if (kind === "time") return value;
+  const { year, month, day } = parseDate(value);
+  const weekday = WEEKDAYS[new Date(year, month - 1, day).getDay()];
+  return `${year}年${month}月${day}日(${weekday})`;
 }
 
-/** ネイティブ向け: テキスト入力ではなく、ステッパーで日付・時刻を変える。 */
+/**
+ * 日付・時刻の選択フィールド。テキスト入力はなく、タップで開くパネルから選ぶ。
+ * 時刻は「時」と「分」のチップ、日付はカレンダーから選択する。
+ */
 export function DateTimeField({ kind, value, onChange }: Props) {
-  const step = kind === "date" ? 1 : 5;
-  const unit = kind === "date" ? "日" : "分";
-  const shift = (delta: number) => onChange(kind === "date" ? shiftDate(value, delta) : shiftTime(value, delta));
+  const [open, setOpen] = useState(false);
+  const panelProgress = useRef(new Animated.Value(0)).current;
+  const parsedDate = parseDate(value);
+  const [viewYear, setViewYear] = useState(parsedDate.year);
+  const [viewMonth, setViewMonth] = useState(parsedDate.month);
+
+  useEffect(() => {
+    if (!open) { panelProgress.setValue(0); return; }
+    const animation = Animated.timing(panelProgress, { toValue: 1, duration: 180, useNativeDriver: false });
+    animation.start();
+    return () => animation.stop();
+  }, [open, panelProgress]);
+
+  const toggle = () => {
+    if (!open && kind === "date") { setViewYear(parsedDate.year); setViewMonth(parsedDate.month); }
+    setOpen((current) => !current);
+  };
+
   return (
-    <View style={styles.row}>
+    <View>
       <Pressable
-        style={({ pressed }) => [styles.stepButton, pressed && styles.stepButtonPressed]}
-        onPress={() => shift(-step)}
+        style={({ pressed }) => [styles.field, pressed && styles.fieldPressed]}
+        onPress={toggle}
         accessibilityRole="button"
-        accessibilityLabel={`${step}${unit}前へ`}
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${kind === "date" ? "日付" : "時刻"}: ${displayValue(kind, value)}`}
       >
-        <Text style={styles.stepButtonText}>−{step}{unit}</Text>
+        <Ionicons name={kind === "date" ? "calendar-outline" : "time-outline"} size={18} color={NAVY} />
+        <Text style={styles.fieldValue}>{displayValue(kind, value)}</Text>
+        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={MUTED} />
       </Pressable>
-      <Text style={styles.value}>{displayValue(kind, value)}</Text>
-      <Pressable
-        style={({ pressed }) => [styles.stepButton, pressed && styles.stepButtonPressed]}
-        onPress={() => shift(step)}
-        accessibilityRole="button"
-        accessibilityLabel={`${step}${unit}後へ`}
-      >
-        <Text style={styles.stepButtonText}>＋{step}{unit}</Text>
-      </Pressable>
+      {open && (
+        <Animated.View style={[styles.panel, { opacity: panelProgress, transform: [{ translateY: panelProgress.interpolate({ inputRange: [0, 1], outputRange: [-4, 0] }) }] }]}>
+          {kind === "time" ? <TimePanel value={value} onChange={onChange} /> : (
+            <DatePanel
+              value={value}
+              viewYear={viewYear}
+              viewMonth={viewMonth}
+              onNavigate={(year, month) => { setViewYear(year); setViewMonth(month); }}
+              onSelect={(next) => { onChange(next); setOpen(false); }}
+            />
+          )}
+          <Pressable style={({ pressed }) => [styles.closeRow, pressed && styles.fieldPressed]} onPress={() => setOpen(false)} accessibilityRole="button">
+            <Text style={styles.closeText}>閉じる</Text>
+          </Pressable>
+        </Animated.View>
+      )}
+    </View>
+  );
+}
+
+function TimePanel({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const { hour, minute } = parseTime(value);
+  const setPart = (nextHour: number, nextMinute: number) => onChange(`${pad(nextHour)}:${pad(nextMinute)}`);
+  const shiftMinutes = (delta: number) => {
+    const total = ((hour * 60 + minute + delta) % 1440 + 1440) % 1440;
+    setPart(Math.floor(total / 60), total % 60);
+  };
+  return (
+    <View>
+      <Text style={styles.panelLabel}>時</Text>
+      <View style={styles.chipGrid}>
+        {Array.from({ length: 24 }, (_, h) => (
+          <Pressable key={h} style={[styles.chip, h === hour && styles.chipActive]} onPress={() => setPart(h, minute)} accessibilityRole="button" accessibilityState={{ selected: h === hour }}>
+            <Text style={[styles.chipText, h === hour && styles.chipTextActive]}>{h}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.panelLabel}>分</Text>
+      <View style={styles.chipGrid}>
+        {MINUTE_STEPS.map((m) => (
+          <Pressable key={m} style={[styles.chip, m === minute && styles.chipActive]} onPress={() => setPart(hour, m)} accessibilityRole="button" accessibilityState={{ selected: m === minute }}>
+            <Text style={[styles.chipText, m === minute && styles.chipTextActive]}>{pad(m)}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <View style={styles.fineRow}>
+        <Pressable style={({ pressed }) => [styles.fineButton, pressed && styles.fieldPressed]} onPress={() => shiftMinutes(-1)} accessibilityRole="button">
+          <Text style={styles.fineButtonText}>−1分</Text>
+        </Pressable>
+        <Text style={styles.fineValue}>{pad(hour)}:{pad(minute)}</Text>
+        <Pressable style={({ pressed }) => [styles.fineButton, pressed && styles.fieldPressed]} onPress={() => shiftMinutes(1)} accessibilityRole="button">
+          <Text style={styles.fineButtonText}>＋1分</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function DatePanel({ value, viewYear, viewMonth, onNavigate, onSelect }: {
+  value: string;
+  viewYear: number;
+  viewMonth: number;
+  onNavigate: (year: number, month: number) => void;
+  onSelect: (value: string) => void;
+}) {
+  const selected = parseDate(value);
+  const today = new Date();
+  const firstWeekday = new Date(viewYear, viewMonth - 1, 1).getDay();
+  const daysInMonth = new Date(viewYear, viewMonth, 0).getDate();
+  const cells: (number | null)[] = [...Array.from({ length: firstWeekday }, () => null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const move = (delta: number) => {
+    const next = new Date(viewYear, viewMonth - 1 + delta, 1);
+    onNavigate(next.getFullYear(), next.getMonth() + 1);
+  };
+  return (
+    <View>
+      <View style={styles.monthHeader}>
+        <Pressable style={({ pressed }) => [styles.monthNav, pressed && styles.fieldPressed]} onPress={() => move(-1)} accessibilityRole="button" accessibilityLabel="前の月">
+          <Ionicons name="chevron-back" size={17} color={NAVY} />
+        </Pressable>
+        <Text style={styles.monthTitle}>{viewYear}年{viewMonth}月</Text>
+        <Pressable style={({ pressed }) => [styles.monthNav, pressed && styles.fieldPressed]} onPress={() => move(1)} accessibilityRole="button" accessibilityLabel="次の月">
+          <Ionicons name="chevron-forward" size={17} color={NAVY} />
+        </Pressable>
+      </View>
+      <View style={styles.weekHeader}>
+        {WEEKDAYS.map((weekday) => <Text key={weekday} style={styles.weekHeaderText}>{weekday}</Text>)}
+      </View>
+      <View style={styles.dayGrid}>
+        {cells.map((day, index) => {
+          if (day === null) return <View key={`blank-${index}`} style={styles.dayCell} />;
+          const isSelected = selected.year === viewYear && selected.month === viewMonth && selected.day === day;
+          const isToday = today.getFullYear() === viewYear && today.getMonth() + 1 === viewMonth && today.getDate() === day;
+          return (
+            <Pressable
+              key={day}
+              style={[styles.dayCell, isToday && styles.dayCellToday, isSelected && styles.dayCellSelected]}
+              onPress={() => onSelect(formatDateValue(viewYear, viewMonth, day))}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isSelected }}
+            >
+              <Text style={[styles.dayText, isSelected && styles.dayTextSelected]}>{day}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
-  value: { flex: 1, textAlign: "center", color: "#17212B", fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700" },
-  stepButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 11, backgroundColor: "rgba(11,91,149,0.07)", borderWidth: 1, borderColor: "rgba(11,91,149,0.16)" },
-  stepButtonPressed: { opacity: 0.7, transform: [{ scale: 0.96 }] },
-  stepButtonText: { color: "#0B5B95", fontSize: 12, fontWeight: "800" },
+  field: { minHeight: 50, marginTop: 9, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, borderRadius: 15, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: BORDER },
+  fieldPressed: { opacity: 0.75, transform: [{ scale: 0.98 }] },
+  fieldValue: { flex: 1, color: INK, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700", paddingVertical: 8 },
+  panel: { marginTop: 8, padding: 13, borderRadius: 15, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: BORDER },
+  panelLabel: { color: MUTED, fontSize: 11, fontWeight: "800", marginTop: 6, marginBottom: 7 },
+  chipGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  chip: { width: "15%", minHeight: 34, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "rgba(11,91,149,0.06)", borderWidth: 1, borderColor: "rgba(11,91,149,0.12)" },
+  chipActive: { backgroundColor: NAVY, borderColor: NAVY },
+  chipText: { color: INK, fontSize: 13, fontWeight: "700" },
+  chipTextActive: { color: "#FFFFFF" },
+  fineRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
+  fineButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 11, backgroundColor: "rgba(11,91,149,0.07)", borderWidth: 1, borderColor: "rgba(11,91,149,0.16)" },
+  fineButtonText: { color: NAVY, fontSize: 12, fontWeight: "800" },
+  fineValue: { flex: 1, textAlign: "center", color: INK, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "800" },
+  monthHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  monthNav: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "rgba(11,91,149,0.07)" },
+  monthTitle: { color: INK, fontSize: 14, fontWeight: "800" },
+  weekHeader: { flexDirection: "row" },
+  weekHeaderText: { width: "14.28%", textAlign: "center", color: MUTED, fontSize: 11, fontWeight: "700", paddingVertical: 4 },
+  dayGrid: { flexDirection: "row", flexWrap: "wrap" },
+  dayCell: { width: "14.28%", aspectRatio: 1, maxHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 10 },
+  dayCellToday: { borderWidth: 1, borderColor: NAVY },
+  dayCellSelected: { backgroundColor: NAVY },
+  dayText: { color: INK, fontSize: 13, fontWeight: "700" },
+  dayTextSelected: { color: "#FFFFFF" },
+  closeRow: { alignSelf: "flex-end", marginTop: 10, paddingHorizontal: 10, paddingVertical: 5 },
+  closeText: { color: NAVY, fontSize: 12, fontWeight: "800" },
 });
