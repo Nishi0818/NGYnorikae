@@ -614,7 +614,7 @@ function findTimedRouteFromTimetables(timetables: OfflineTimetables, {
           const arrival = stationPassageMinutes(timetables, candidateLine, target.station, direction, estimatedPassage, estimatedPassage, dayType);
           const leg: RouteLeg = {
             lineId: candidateLine.id,
-            lineName: candidateLine.name,
+            lineName: isBusLine(candidateLine.id) ? "名古屋市バス" : candidateLine.name,
             lineColor: candidateLine.color,
             textColor: candidateLine.textColor,
             directionLabel: direction === 1 ? candidateLine.positiveDirectionLabel : candidateLine.negativeDirectionLabel,
