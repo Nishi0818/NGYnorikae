@@ -1,4 +1,4 @@
-const CACHE_NAME = "nagoya-subway-offline-v6";
+const CACHE_NAME = "nagoya-subway-offline-v7";
 const APP_SHELL = ["/", "/manifest.json"];
 
 self.addEventListener("install", (event) => {
