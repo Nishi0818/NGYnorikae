@@ -67,12 +67,12 @@ const COLORS = {
 };
 
 const DARK_COLORS: typeof COLORS = {
-  ink: "#F0EAE1",
-  navy: "#6FB3E8",
-  teal: "#7FB8CC",
-  amber: "#F5C400",
-  blue: "#5EA9DD",
-  red: "#E8836F",
+  ink: "#EAE3D7",
+  navy: "#93B9DC",
+  teal: "#95C0CE",
+  amber: "#E6C65C",
+  blue: "#8FB9D9",
+  red: "#DF8F7C",
   canvas: "#1F1C19",
   surface: "#292622",
   elevated: "#322E28",
@@ -84,7 +84,7 @@ const DARK_COLORS: typeof COLORS = {
   danger: "#E0785F",
   glass: "rgba(43,39,34,0.88)",
   overline: "#C9BBA6",
-  transferText: "#E3B341",
+  transferText: "#D8BA6C",
 };
 
 function useAppColors() {

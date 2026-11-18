@@ -22,15 +22,15 @@ const LIGHT = {
 };
 
 const DARK: typeof LIGHT = {
-  ink: "#F0EAE1",
-  navy: "#6FB3E8",
+  ink: "#EAE3D7",
+  navy: "#93B9DC",
   muted: "#ADA294",
   border: "#3B372F",
   surface: "#292622",
-  chipBg: "rgba(111,179,232,0.10)",
-  chipBorder: "rgba(111,179,232,0.22)",
-  softBg: "rgba(111,179,232,0.10)",
-  softBorder: "rgba(111,179,232,0.25)",
+  chipBg: "rgba(147,185,220,0.10)",
+  chipBorder: "rgba(147,185,220,0.22)",
+  softBg: "rgba(147,185,220,0.10)",
+  softBorder: "rgba(147,185,220,0.25)",
   onNavy: "#17212B",
 };
 
