@@ -554,8 +554,10 @@ export default function HomeScreen() {
     setHistoryLoaded(true);
   }, []);
 
-  // 静的書き出しにはビルドした瞬間の日時が焼き込まれ、ハイドレーション後も
-  // 画面に残り続けてしまう。そのため検索条件の日時はマウント完了後にだけ出す。
+  // 静的書き出しはライト配色・ビルド時刻で作られ、ハイドレーション後も
+  // その見た目が画面に残り続けてしまう（ダークモード端末で一部だけ
+  // ライト配色になる等）。そのためマウント完了後に画面を作り直し、
+  // 検索条件の日時もマウント完了後にだけ出す。
   useEffect(() => {
     setHydrated(true);
   }, []);
@@ -767,7 +769,7 @@ export default function HomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView key={hydrated ? "client" : "ssr"} style={styles.safeArea}>
       <StatusBar style={useColorScheme() === "dark" ? "light" : "dark"} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.topBar}>
