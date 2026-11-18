@@ -506,6 +506,7 @@ export default function HomeScreen() {
   const [alternativeIndex, setAlternativeIndex] = useState(0);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [error, setError] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
@@ -551,6 +552,12 @@ export default function HomeScreen() {
   useEffect(() => {
     setSearchHistory(loadSearchHistory());
     setHistoryLoaded(true);
+  }, []);
+
+  // 静的書き出しにはビルドした瞬間の日時が焼き込まれ、ハイドレーション後も
+  // 画面に残り続けてしまう。そのため検索条件の日時はマウント完了後にだけ出す。
+  useEffect(() => {
+    setHydrated(true);
   }, []);
 
   // 初回表示を邪魔しないよう、アイドル時間に時刻表本体を先読みしておく。
@@ -824,8 +831,7 @@ export default function HomeScreen() {
           <View style={styles.departureIcon}><Ionicons name="time-outline" size={18} color={colors.navy} /></View>
           <View style={styles.departureCopy}>
             <Text style={styles.departureLabel}>検索条件</Text>
-            {/* 静的書き出し(ビルド時刻)とハイドレーション時(閲覧時刻)で内容が食い違うのは意図通りのため、警告を抑止する。 */}
-            <Text suppressHydrationWarning style={styles.departureValue}>{selectedDate ? <>{selectedDate.getMonth() + 1}/{selectedDate.getDate()}<Text style={{ color: weekdayColor(selectedDate, colors) }}>({"日月火水木金土"[selectedDate.getDay()]})</Text> {timeText} {timeMode === "arrival" ? "到着" : "出発"}</> : `${timeText} ${timeMode === "arrival" ? "到着" : "出発"}`}</Text>
+            <Text style={styles.departureValue}>{hydrated ? (selectedDate ? <>{selectedDate.getMonth() + 1}/{selectedDate.getDate()}<Text style={{ color: weekdayColor(selectedDate, colors) }}>({"日月火水木金土"[selectedDate.getDay()]})</Text> {timeText} {timeMode === "arrival" ? "到着" : "出発"}</> : `${timeText} ${timeMode === "arrival" ? "到着" : "出発"}`) : ""}</Text>
           </View>
           <Text style={styles.changeText}>変更</Text>
           <Ionicons name="chevron-forward" size={17} color={colors.lightMuted} />
