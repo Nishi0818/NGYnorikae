@@ -890,6 +890,58 @@ export async function findDepartureRouteResults(params: {
   return { options: { fastest, fewestTransfers }, transferAlternatives };
 }
 
+export type DepartureOption = {
+  route: TimedRoute;
+  /** その運行日でこれより後の便が無い（＝終電）かどうか。 */
+  isLastTrain: boolean;
+};
+
+/**
+ * 指定時刻以降の出発候補を時刻順に最大 `count` 件並べる。「この後の便」の表示用。
+ * 先頭は通常の検索結果（`preference` の基準で選ばれた経路）と一致する。
+ * 末尾の候補については、さらにもう1件先を探して見つからなければ終電として印を付ける。
+ */
+export async function findDepartureOptions(params: {
+  origin: string;
+  destination: string;
+  departureMinutes: number;
+  dayType: ServiceDayType;
+  preference: RoutePreference;
+  count?: number;
+}): Promise<DepartureOption[]> {
+  if (!params.origin || !params.destination || params.origin === params.destination || !linesByStation.has(params.origin) || !linesByStation.has(params.destination)) {
+    return [];
+  }
+  const timetables = await loadOfflineTimetables();
+  const count = params.count ?? 3;
+  const routes: TimedRoute[] = [];
+  let cursor = params.departureMinutes;
+  while (routes.length < count) {
+    const route = findTimedRouteFromTimetables(timetables, {
+      origin: params.origin,
+      destination: params.destination,
+      departureMinutes: cursor,
+      dayType: params.dayType,
+      preference: params.preference,
+    });
+    if (!route) break;
+    const previous = routes[routes.length - 1];
+    // 同じ出発時刻の経路が重複して返ることは想定しないが、無限ループ防止に時刻が進まなければ打ち切る。
+    if (previous && route.actualDepartureMinutes <= previous.actualDepartureMinutes) break;
+    routes.push(route);
+    cursor = route.actualDepartureMinutes + 1;
+  }
+  if (routes.length === 0) return [];
+  const probe = findTimedRouteFromTimetables(timetables, {
+    origin: params.origin,
+    destination: params.destination,
+    departureMinutes: cursor,
+    dayType: params.dayType,
+    preference: params.preference,
+  });
+  return routes.map((route, index) => ({ route, isLastTrain: index === routes.length - 1 && !probe }));
+}
+
 /** 起動直後にアイドル時間で時刻表本体を先読みし、初回検索時に通信できない場合でも失敗しないようにする。 */
 export function preloadOfflineTimetables(): void {
   void loadOfflineTimetables();

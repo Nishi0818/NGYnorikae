@@ -1,6 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
-import { Animated, Pressable, StyleSheet, Text, View, useColorScheme } from "react-native";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
+
+import { useTheme } from "@/lib/theme-context";
 
 type Props = {
   kind: "date" | "time";
@@ -35,11 +37,11 @@ const DARK: typeof LIGHT = {
 };
 
 function usePalette() {
-  return useColorScheme() === "dark" ? DARK : LIGHT;
+  return useTheme().effectiveScheme === "dark" ? DARK : LIGHT;
 }
 
 function useFieldStyles() {
-  return useColorScheme() === "dark" ? darkStyles : lightStyles;
+  return useTheme().effectiveScheme === "dark" ? darkStyles : lightStyles;
 }
 
 const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"] as const;

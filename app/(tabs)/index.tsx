@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { AccessibilityInfo, ActivityIndicator, Animated as RNAnimated, FlatList, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text as RNText, TextInput, type TextProps, type TextStyle, useColorScheme, View } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, Animated as RNAnimated, FlatList, Image, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text as RNText, TextInput, type TextProps, type TextStyle, View } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 
@@ -13,6 +13,7 @@ import {
   SUBWAY_LINES,
   TIMETABLE_REVISIONS,
   findArrivalRouteResults,
+  findDepartureOptions,
   findDepartureRouteResults,
   formatMinutes,
   getLinesForStation,
@@ -29,7 +30,10 @@ import {
   preloadOfflineTimetables,
 } from "@/lib/subway/network";
 import type { LineId, RoutePreference, ServiceDayType, SubwayLine, TimedRoute } from "@/lib/subway/types";
+import type { DepartureOption } from "@/lib/subway/network";
 import { loadSearchHistory, mergeSearchHistory, saveSearchHistory, type SearchHistoryEntry } from "@/lib/subway/search-history";
+import { addFavorite, favoriteId, isFavorite, loadFavorites, removeFavorite, saveFavorites, type FavoriteRoute } from "@/lib/subway/favorites";
+import { ThemePreferenceProvider, useTheme } from "@/lib/theme-context";
 
 type StationField = "origin" | "destination";
 type StationKindFilter = "all" | "rail" | "bus";
@@ -88,7 +92,7 @@ const DARK_COLORS: typeof COLORS = {
 };
 
 function useAppColors() {
-  return useColorScheme() === "dark" ? DARK_COLORS : COLORS;
+  return useTheme().effectiveScheme === "dark" ? DARK_COLORS : COLORS;
 }
 
 function Text({ style, ...props }: TextProps & { suppressHydrationWarning?: boolean }) {
@@ -296,6 +300,8 @@ function ResultPanel({
   onSelectAlternative,
   detailsOpen,
   onToggleDetails,
+  departureOptions,
+  onSelectLaterDeparture,
 }: {
   route: TimedRoute;
   routeOptions: RouteOptions;
@@ -306,6 +312,8 @@ function ResultPanel({
   onSelectAlternative: (index: number) => void;
   detailsOpen: boolean;
   onToggleDetails: () => void;
+  departureOptions: DepartureOption[] | null;
+  onSelectLaterDeparture: (departureMinutes: number) => void;
 }) {
   const styles = useAppStyles();
   const colors = useAppColors();
@@ -376,7 +384,12 @@ function ResultPanel({
           })}
         </View>
       )}
-      <Text style={styles.resultOverline}>{preference === "fastest" ? "最短の経路" : "乗換少なめの経路"}</Text>
+      <View style={styles.resultOverlineRow}>
+        <Text style={styles.resultOverline}>{preference === "fastest" ? "最短の経路" : "乗換少なめの経路"}</Text>
+        {departureOptions?.[0]?.isLastTrain ? (
+          <View style={styles.lastTrainBadge}><Text style={styles.lastTrainBadgeText}>終電</Text></View>
+        ) : null}
+      </View>
       <View style={styles.resultHero}>
         <View>
           <Text style={styles.resultDeparture}>{formatMinutes(route.actualDepartureMinutes)}</Text>
@@ -433,6 +446,29 @@ function ResultPanel({
         })}
       </View>
 
+      {departureOptions && departureOptions.length > 1 ? (
+        <View style={styles.laterSection}>
+          <Text style={styles.laterTitle}>この後の便</Text>
+          {departureOptions.slice(1).map((option) => (
+            <MicroPressable
+              key={option.route.actualDepartureMinutes}
+              style={[styles.laterRow, styles.glassPanel]}
+              onPress={() => onSelectLaterDeparture(option.route.actualDepartureMinutes)}
+              accessibilityRole="button"
+              accessibilityLabel={`${formatMinutes(option.route.actualDepartureMinutes)}発、${formatMinutes(option.route.arrivalMinutes)}着の便で検索`}
+            >
+              <Text style={styles.laterTime}>{formatMinutes(option.route.actualDepartureMinutes)}</Text>
+              <Ionicons name="arrow-forward" size={14} color={colors.navy} />
+              <Text style={styles.laterTime}>{formatMinutes(option.route.arrivalMinutes)}</Text>
+              <Text style={styles.laterMeta}>{option.route.totalMinutes}分 · {option.route.transferCount === 0 ? "乗換なし" : `乗換${option.route.transferCount}回`} · {option.route.fare}円</Text>
+              {option.isLastTrain ? (
+                <View style={styles.lastTrainBadge}><Text style={styles.lastTrainBadgeText}>終電</Text></View>
+              ) : null}
+            </MicroPressable>
+          ))}
+        </View>
+      ) : null}
+
       <MicroPressable style={styles.detailToggle} onPress={onToggleDetails} accessibilityRole="button" accessibilityState={{ expanded: detailsOpen }}>
         <Text style={styles.detailToggleText}>{detailsOpen ? "経路詳細を閉じる" : "経路の詳細を見る"}</Text>
         <RNAnimated.View style={{ transform: [{ rotate: chevronRotation.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "180deg"] }) }] }}><Ionicons name="chevron-down" size={18} color={colors.navy} /></RNAnimated.View>
@@ -480,9 +516,18 @@ function ResultPanel({
 }
 
 export default function HomeScreen() {
+  return (
+    <ThemePreferenceProvider>
+      <HomeScreenInner />
+    </ThemePreferenceProvider>
+  );
+}
+
+function HomeScreenInner() {
   const initialNow = useMemo(() => new Date(), []);
   const styles = useAppStyles();
   const colors = useAppColors();
+  const { preference: themePreference, setPreference: setThemePreference, effectiveScheme } = useTheme();
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [dateText, setDateText] = useState(formatDateInput(initialNow));
@@ -506,12 +551,16 @@ export default function HomeScreen() {
   const [alternativeIndex, setAlternativeIndex] = useState(0);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [favorites, setFavorites] = useState<FavoriteRoute[]>([]);
+  const [favoritesLoaded, setFavoritesLoaded] = useState(false);
+  const [departureOptionsMap, setDepartureOptionsMap] = useState<Record<RoutePreference, DepartureOption[]> | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [error, setError] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
   const [highlightedStation, setHighlightedStation] = useState<string | null>(null);
   const [highlightedHistoryId, setHighlightedHistoryId] = useState<string | null>(null);
+  const [highlightedFavoriteId, setHighlightedFavoriteId] = useState<string | null>(null);
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // バス・名鉄データは実行時取得のため、読み込み完了を検知して駅一覧の再計算(useMemo)を促す。
   // バス・名鉄は並行して読み込まれるため、同じboolean(true)を2回setするとReactが
@@ -552,7 +601,16 @@ export default function HomeScreen() {
   useEffect(() => {
     setSearchHistory(loadSearchHistory());
     setHistoryLoaded(true);
+    setFavorites(loadFavorites());
+    setFavoritesLoaded(true);
   }, []);
+
+  // テーマを端末設定と別に固定した場合は、画面外（オーバースクロール領域）の背景も追随させる。
+  useEffect(() => {
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      document.body.style.backgroundColor = colors.canvas;
+    }
+  }, [colors.canvas]);
 
   // 静的書き出しはライト配色・ビルド時刻で作られ、ハイドレーション後も
   // その見た目が画面に残り続けてしまう（ダークモード端末で一部だけ
@@ -583,6 +641,10 @@ export default function HomeScreen() {
   useEffect(() => {
     if (historyLoaded) saveSearchHistory(searchHistory);
   }, [historyLoaded, searchHistory]);
+
+  useEffect(() => {
+    if (favoritesLoaded) saveFavorites(favorites);
+  }, [favoritesLoaded, favorites]);
 
   function openStationPicker(field: StationField) {
     setPickerField(field);
@@ -642,6 +704,7 @@ export default function HomeScreen() {
     if (field === "destination") setDestination("");
     setRouteOptions(null);
     setTransferAlternatives([]);
+    setDepartureOptionsMap(null);
     setShowDetails(false);
     setError("");
   }
@@ -698,6 +761,7 @@ export default function HomeScreen() {
     setTimeMode(entry.timeMode ?? "departure");
     setRouteOptions(null);
     setTransferAlternatives([]);
+    setDepartureOptionsMap(null);
     setShowDetails(false);
     setError("");
   }
@@ -706,41 +770,108 @@ export default function HomeScreen() {
     setSearchHistory((current) => current.filter((entry) => entry.id !== id));
   }
 
-  async function runSearch() {
+  const currentIsFavorite = Boolean(origin && destination && isFavorite(favorites, origin, destination));
+
+  function toggleFavorite() {
+    if (!origin || !destination) return;
+    hapticSelection();
+    if (currentIsFavorite) {
+      setFavorites((current) => removeFavorite(current, favoriteId(origin, destination)));
+    } else {
+      setFavorites((current) => addFavorite(current, { id: favoriteId(origin, destination), origin, destination, savedAt: new Date().toISOString() }));
+    }
+  }
+
+  function removeFavoriteById(id: string) {
+    setFavorites((current) => removeFavorite(current, id));
+  }
+
+  // お気に入りは「いま出発するなら」で使うものなので、日時は保存せずタップ時点の現在時刻で検索する。
+  function searchFavorite(favorite: FavoriteRoute) {
+    const now = new Date();
+    const overrides = {
+      origin: favorite.origin,
+      destination: favorite.destination,
+      dateText: formatDateInput(now),
+      timeText: formatTimeInput(now),
+      dayMode: "auto" as DayMode,
+      timeMode: "departure" as TimeMode,
+    };
+    setOrigin(overrides.origin);
+    setDestination(overrides.destination);
+    setDateText(overrides.dateText);
+    setTimeText(overrides.timeText);
+    setDayMode(overrides.dayMode);
+    setTimeMode(overrides.timeMode);
+    void executeSearch(overrides);
+  }
+
+  function pressFavorite(favorite: FavoriteRoute) {
+    if (reducedMotion) {
+      searchFavorite(favorite);
+      return;
+    }
+    setHighlightedFavoriteId(favorite.id);
+    if (tapTimer.current) clearTimeout(tapTimer.current);
+    tapTimer.current = setTimeout(() => {
+      searchFavorite(favorite);
+      setHighlightedFavoriteId(null);
+    }, 150);
+  }
+
+  type SearchOverrides = {
+    origin: string;
+    destination: string;
+    dateText: string;
+    timeText: string;
+    dayMode: DayMode;
+    timeMode: TimeMode;
+  };
+
+  async function executeSearch(overrides?: SearchOverrides) {
+    const searchOrigin = overrides?.origin ?? origin;
+    const searchDestination = overrides?.destination ?? destination;
+    const searchDateText = overrides?.dateText ?? dateText;
+    const searchTimeText = overrides?.timeText ?? timeText;
+    const searchDayMode = overrides?.dayMode ?? dayMode;
+    const searchTimeMode = overrides?.timeMode ?? timeMode;
+    const searchDate = parseDateInput(searchDateText);
+    const searchDayType: ServiceDayType = searchDayMode === "auto" ? (searchDate ? getServiceDayType(searchDate) : "weekday") : searchDayMode;
     hapticLight();
     setError("");
     setRouteOptions(null);
     setTransferAlternatives([]);
+    setDepartureOptionsMap(null);
     setAlternativeIndex(0);
     setShowDetails(false);
-    if (!origin || !destination) {
+    if (!searchOrigin || !searchDestination) {
       setError("出発駅と到着駅を選択してください。");
       return;
     }
-    if (origin === destination) {
+    if (searchOrigin === searchDestination) {
       setError("出発駅と到着駅は異なる駅を選択してください。");
       return;
     }
-    if (!selectedDate) {
+    if (!searchDate) {
       setError("日付は YYYY-MM-DD 形式で入力してください。");
       return;
     }
-    const timeMinutes = minutesFromTimeText(timeText);
+    const timeMinutes = minutesFromTimeText(searchTimeText);
     if (timeMinutes === null || timeMinutes < 0 || timeMinutes >= 1440) {
-      setError(timeMode === "arrival" ? "到着時刻は 00:00〜23:59 で入力してください。" : "出発時刻は 00:00〜23:59 で入力してください。");
+      setError(searchTimeMode === "arrival" ? "到着時刻は 00:00〜23:59 で入力してください。" : "出発時刻は 00:00〜23:59 で入力してください。");
       return;
     }
     setIsSearching(true);
     try {
-      const results = timeMode === "arrival"
-        ? await findArrivalRouteResults({ origin, destination, arrivalByMinutes: timeMinutes, dayType: serviceDayType })
-        : await findDepartureRouteResults({ origin, destination, departureMinutes: timeMinutes, dayType: serviceDayType });
+      const results = searchTimeMode === "arrival"
+        ? await findArrivalRouteResults({ origin: searchOrigin, destination: searchDestination, arrivalByMinutes: timeMinutes, dayType: searchDayType })
+        : await findDepartureRouteResults({ origin: searchOrigin, destination: searchDestination, departureMinutes: timeMinutes, dayType: searchDayType });
       const nextOptions: RouteOptions = results.options;
       const nextAlternatives: TimedRoute[] = results.transferAlternatives;
       const nextRoute = nextOptions.fastest ?? nextOptions.fewestTransfers;
       if (!nextRoute) {
         setError(
-          timeMode === "arrival"
+          searchTimeMode === "arrival"
             ? "指定時刻までに到着できる経路が見つかりませんでした。到着条件を変更してください。"
             : "指定時刻以降に利用できる経路が見つかりませんでした。出発条件を変更してください。",
         );
@@ -750,14 +881,26 @@ export default function HomeScreen() {
       setRoutePreference(nextOptions.fastest ? "fastest" : "fewestTransfers");
       setTransferAlternatives(nextAlternatives);
       setAlternativeIndex(0);
+      if (searchTimeMode === "departure") {
+        // 「この後の便」と終電表示のため、両基準ぶんの後続候補も求める。失敗しても検索結果自体は出す。
+        try {
+          const [fastestOptions, fewestOptions] = await Promise.all([
+            nextOptions.fastest ? findDepartureOptions({ origin: searchOrigin, destination: searchDestination, departureMinutes: timeMinutes, dayType: searchDayType, preference: "fastest", count: 3 }) : Promise.resolve([]),
+            nextOptions.fewestTransfers ? findDepartureOptions({ origin: searchOrigin, destination: searchDestination, departureMinutes: timeMinutes, dayType: searchDayType, preference: "fewestTransfers", count: 3 }) : Promise.resolve([]),
+          ]);
+          setDepartureOptionsMap({ fastest: fastestOptions, fewestTransfers: fewestOptions });
+        } catch {
+          setDepartureOptionsMap(null);
+        }
+      }
       const historyEntry: SearchHistoryEntry = {
-        id: `${origin}::${destination}::${dateText}::${timeText}::${dayMode}::${timeMode}`,
-        origin,
-        destination,
-        dateText,
-        timeText,
-        dayMode,
-        timeMode,
+        id: `${searchOrigin}::${searchDestination}::${searchDateText}::${searchTimeText}::${searchDayMode}::${searchTimeMode}`,
+        origin: searchOrigin,
+        destination: searchDestination,
+        dateText: searchDateText,
+        timeText: searchTimeText,
+        dayMode: searchDayMode,
+        timeMode: searchTimeMode,
         savedAt: new Date().toISOString(),
       };
       setSearchHistory((current) => mergeSearchHistory(current, historyEntry));
@@ -768,9 +911,22 @@ export default function HomeScreen() {
     }
   }
 
+  function runSearch() {
+    void executeSearch();
+  }
+
+  // 「この後の便」の行を選んだら、その出発時刻で検索し直す。
+  function searchLaterDeparture(departureMinutes: number) {
+    const normalized = ((departureMinutes % 1440) + 1440) % 1440;
+    const nextTimeText = `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+    setTimeText(nextTimeText);
+    setTimeMode("departure");
+    void executeSearch({ origin, destination, dateText, timeText: nextTimeText, dayMode, timeMode: "departure" });
+  }
+
   return (
     <SafeAreaView key={hydrated ? "client" : "ssr"} style={styles.safeArea}>
-      <StatusBar style={useColorScheme() === "dark" ? "light" : "dark"} />
+      <StatusBar style={effectiveScheme === "dark" ? "light" : "dark"} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.topBar}>
           <View style={styles.brandLockup}>
@@ -827,6 +983,19 @@ export default function HomeScreen() {
           >
             <Ionicons name="swap-vertical" size={18} color={colors.navy} />
           </MicroPressable>
+          <View style={styles.favoriteRow}>
+            <MicroPressable
+              style={styles.favoriteButton}
+              onPress={toggleFavorite}
+              disabled={!origin || !destination}
+              accessibilityRole="button"
+              accessibilityState={{ selected: currentIsFavorite, disabled: !origin || !destination }}
+              accessibilityLabel={currentIsFavorite ? "お気に入りから外す" : "この経路をお気に入りに追加"}
+            >
+              <Ionicons name={currentIsFavorite ? "star" : "star-outline"} size={15} color={!origin || !destination ? colors.lightMuted : currentIsFavorite ? colors.amber : colors.muted} />
+              <Text style={[styles.favoriteButtonText, (!origin || !destination) && styles.favoriteButtonTextDisabled]}>{currentIsFavorite ? "お気に入り済み" : "お気に入りに追加"}</Text>
+            </MicroPressable>
+          </View>
         </View>
 
         <MicroPressable style={[styles.departureRow, styles.glassPanel]} onPress={() => setShowOptions(true)} accessibilityRole="button">
@@ -857,8 +1026,32 @@ export default function HomeScreen() {
             onSelectAlternative={(index) => { setAlternativeIndex(index); setShowDetails(false); }}
             detailsOpen={showDetails}
             onToggleDetails={() => { hapticSelection(); setShowDetails((value) => !value); }}
+            departureOptions={alternativeIndex === 0 ? (departureOptionsMap?.[routePreference] ?? null) : null}
+            onSelectLaterDeparture={searchLaterDeparture}
           />
         ) : null}
+
+        {favorites.length > 0 && (
+          <View style={[styles.historyPanel, styles.glassPanel]}>
+            <View style={styles.historyHeader}>
+              <View style={styles.historyTitleWrap}><Ionicons name="star" size={15} color={colors.amber} /><Text style={styles.historyTitle}>お気に入り</Text></View>
+            </View>
+            {favorites.map((favorite) => (
+              <View key={favorite.id} style={styles.historyRow}>
+                <MicroPressable style={[styles.historyEntry, highlightedFavoriteId === favorite.id && styles.historyEntryHighlighted]} onPress={() => pressFavorite(favorite)} accessibilityRole="button" accessibilityLabel={`${favorite.origin}から${favorite.destination}を今の時刻で検索`}>
+                  <View style={styles.historyRouteIcon}><Ionicons name="arrow-forward" size={13} color={colors.navy} /></View>
+                  <View style={styles.historyCopy}>
+                    <Text style={styles.historyRoute}>{favorite.origin} <Text style={styles.historyArrow}>→</Text> {favorite.destination}</Text>
+                    <Text style={styles.historyMeta}>タップで今の時刻で検索</Text>
+                  </View>
+                </MicroPressable>
+                <MicroPressable style={styles.historyDelete} onPress={() => removeFavoriteById(favorite.id)} accessibilityRole="button" accessibilityLabel={`${favorite.origin}から${favorite.destination}をお気に入りから外す`}>
+                  <Ionicons name="close" size={16} color={colors.muted} />
+                </MicroPressable>
+              </View>
+            ))}
+          </View>
+        )}
 
         {searchHistory.length > 0 && (
           <View style={[styles.historyPanel, styles.glassPanel]}>
@@ -882,6 +1075,25 @@ export default function HomeScreen() {
           </View>
         )}
 
+
+        <View style={styles.themeRow}>
+          <Ionicons name="contrast-outline" size={18} color={colors.muted} />
+          <Text style={styles.dataRowText}>テーマ</Text>
+          <View style={styles.themeSegmented}>
+            {([["auto", "自動"], ["light", "ライト"], ["dark", "ダーク"]] as const).map(([value, label]) => (
+              <MicroPressable
+                key={value}
+                style={[styles.themeSegment, themePreference === value && styles.themeSegmentActive]}
+                onPress={() => setThemePreference(value)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: themePreference === value }}
+                accessibilityLabel={`テーマを${label}にする`}
+              >
+                <Text style={[styles.themeSegmentText, themePreference === value && styles.themeSegmentTextActive]}>{label}</Text>
+              </MicroPressable>
+            ))}
+          </View>
+        </View>
 
         <MicroPressable style={styles.dataRow} onPress={() => setShowDataInfo((value) => !value)} accessibilityRole="button" accessibilityState={{ expanded: showDataInfo }}>
           <Ionicons name="information-circle-outline" size={18} color={colors.muted} />
@@ -1009,11 +1221,11 @@ function createStyles(C: typeof COLORS) {
   intro: { marginTop: 30, marginBottom: 22 }, introEyebrow: { color: C.teal, fontSize: 13, fontWeight: "800" }, introTitle: { color: C.ink, fontSize: 31, lineHeight: 39, fontWeight: "800", marginTop: 4, letterSpacing: -0.6 }, introHint: { color: C.muted, fontSize: 13, lineHeight: 19, marginTop: 7 },
   glassPanel: { backgroundColor: C.glass, borderColor: "rgba(18,117,187,0.16)", shadowColor: "#1B75BB", shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, routeCard: { position: "relative", borderWidth: 1, borderColor: C.border, borderRadius: 18, backgroundColor: C.surface, padding: 10 }, routeFields: { gap: 0 }, routeFieldRow: { minHeight: 60, flexDirection: "row", alignItems: "center" }, routeField: { flex: 1, minHeight: 60, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 7 }, fieldInlineClear: { width: 34, height: 34, marginRight: 4, alignItems: "center", justifyContent: "center", borderRadius: 14, backgroundColor: "rgba(11,91,149,0.06)" }, routeFieldCopy: { flex: 1 }, routeLabel: { color: C.muted, fontSize: 11, fontWeight: "700" }, routeValue: { color: C.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }, routePlaceholder: { color: C.lightMuted, fontWeight: "600" }, marker: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: C.border, overflow: "hidden" }, originMarker: { backgroundColor: C.surface }, destinationMarker: { backgroundColor: C.surface }, markerInnerDot: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8 }, splitMarker: { borderColor: "transparent" }, markerDiagonalBase: { position: "absolute", top: 0, left: 0, width: 30, height: 30 }, markerDiagonalOverlay: { position: "absolute", top: 0, left: 0, width: 30, height: 30 }, markerIconBadge: { position: "absolute", top: 6, left: 6, width: 16, height: 16, borderRadius: 8, backgroundColor: C.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: C.border }, markerBusRing: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: BUS_LINE_COLOR, alignItems: "center", justifyContent: "center" }, routeConnectorRow: { height: 8, paddingLeft: 21 }, routeConnector: { height: 8, borderLeftWidth: 2, borderLeftColor: "rgba(18,117,187,0.16)" }, swapButton: { position: "absolute", left: 17, top: 59, width: 30, height: 30, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: C.surface, borderWidth: 1, borderColor: "rgba(18,117,187,0.22)" },
   departureRow: { marginTop: 13, minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 13, borderRadius: 18, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, departureIcon: { width: 31, height: 31, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(31,150,210,0.11)", borderWidth: 1, borderColor: "rgba(31,150,210,0.18)" }, departureCopy: { flex: 1 }, departureLabel: { color: C.muted, fontSize: 11, fontWeight: "700" }, departureValue: { color: C.ink, fontSize: 14, fontWeight: "800", marginTop: 2 }, changeText: { color: C.blue, fontSize: 12, fontWeight: "800" }, historyPanel: { marginTop: 13, borderRadius: 16, padding: 10 }, historyHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4, paddingBottom: 6 }, historyTitleWrap: { flexDirection: "row", alignItems: "center", gap: 6 }, historyTitle: { color: C.ink, fontSize: 12, fontWeight: "800" }, historyRow: { minHeight: 48, flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "rgba(18,117,187,0.09)" }, historyEntry: { flex: 1, minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 4 }, historyRouteIcon: { width: 24, height: 24, alignItems: "center", justifyContent: "center", borderRadius: 10, backgroundColor: "rgba(11,91,149,0.08)" }, historyEntryHighlighted: { backgroundColor: "rgba(11,91,149,0.08)", borderRadius: 12 }, historyCopy: { flex: 1 }, historyRoute: { color: C.ink, fontSize: 13, fontWeight: "700" }, historyArrow: { color: C.teal }, historyMeta: { color: C.muted, fontSize: 10, marginTop: 1 }, historyDelete: { width: 34, height: 34, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  errorText: { color: C.danger, marginTop: 12, fontSize: 12, fontWeight: "700" }, primaryButton: { minHeight: 56, borderRadius: 18, marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, backgroundColor: C.navy, shadowColor: "#1B75BB", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3 }, primaryButtonLoading: { opacity: 0.78 }, searchIconTile: { width: 28, height: 28, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "#1B75BB", borderWidth: 1, borderColor: "rgba(245,196,0,0.72)" }, primaryButtonText: { color: C.surface, fontSize: 16, fontWeight: "800" },
+  favoriteRow: { borderTopWidth: 1, borderTopColor: C.border, marginTop: 6, paddingTop: 8, paddingHorizontal: 7, flexDirection: "row" }, favoriteButton: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4, paddingHorizontal: 2 }, favoriteButtonText: { color: C.muted, fontSize: 12, fontWeight: "700" }, favoriteButtonTextDisabled: { color: C.lightMuted }, errorText: { color: C.danger, marginTop: 12, fontSize: 12, fontWeight: "700" }, primaryButton: { minHeight: 56, borderRadius: 18, marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, backgroundColor: C.navy, shadowColor: "#1B75BB", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3 }, primaryButtonLoading: { opacity: 0.78 }, searchIconTile: { width: 28, height: 28, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "#1B75BB", borderWidth: 1, borderColor: "rgba(245,196,0,0.72)" }, primaryButtonText: { color: C.surface, fontSize: 16, fontWeight: "800" },
   searchHint: { marginTop: 14, color: C.muted, fontSize: 11, textAlign: "center" },
-  resultArea: { marginTop: 28 }, routePreferenceGroup: { flexDirection: "row", padding: 3, borderRadius: 16, marginBottom: 15 }, routePreferenceButton: { flex: 1, minHeight: 72, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, borderRadius: 14 }, routePreferencePill: { position: "absolute", top: 3, bottom: 3, left: 3, borderRadius: 14, backgroundColor: "rgba(11,91,149,0.09)", borderWidth: 1, borderColor: "rgba(11,91,149,0.24)" }, routePreferenceLabel: { color: C.muted, fontSize: 13, fontWeight: "800" }, routePreferenceLabelActive: { color: C.navy }, routePreferenceMeta: { color: C.ink, fontSize: 12, fontWeight: "700", marginTop: 2 }, routePreferenceMetaActive: { color: C.navy }, routePreferenceHint: { color: C.muted, fontSize: 9, marginTop: 2 }, routePreferenceHintActive: { color: C.teal }, alternativeGroup: { flexDirection: "row", gap: 8, marginBottom: 12 }, alternativeChip: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 14, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface }, alternativeChipActive: { borderColor: C.navy, backgroundColor: "rgba(11,91,149,0.08)" }, alternativeChipText: { color: C.muted, fontSize: 12, fontWeight: "700" }, alternativeChipTextActive: { color: C.navy }, resultOverline: { color: C.overline, fontSize: 12, fontWeight: "800", marginBottom: 9 }, resultHero: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, resultDeparture: { color: C.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", letterSpacing: -0.7 }, resultArrival: { color: C.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", textAlign: "right", letterSpacing: -0.7 }, resultPlace: { color: C.muted, fontSize: 13, fontWeight: "700", marginTop: 3 }, resultArrowWrap: { alignItems: "center", gap: 1 }, resultDuration: { color: C.navy, fontSize: 13, fontWeight: "800" }, resultTransfer: { color: C.muted, fontSize: 11, fontWeight: "700" }, resultFare: { color: C.navy, fontSize: 12, fontWeight: "800", marginTop: 1 }, resultArrivalWrap: { alignItems: "flex-end" }, routeSteps: { marginTop: 18, gap: 8 }, routeLegSummary: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 16, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, routeLegColor: { width: 4, alignSelf: "stretch", borderRadius: 3 }, routeLegCopy: { flex: 1 }, routeLegHeading: { flexDirection: "row", alignItems: "center", gap: 8 }, linePill: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 10 }, linePillText: { fontSize: 11, fontWeight: "800" }, routeLegDirection: { flex: 1, color: C.ink, fontSize: 14, fontWeight: "800" }, routeLegMeta: { color: C.muted, fontSize: 11, marginTop: 5 }, routeTransferSummary: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, backgroundColor: C.surface, borderLeftWidth: 1, borderRightWidth: 1, borderColor: C.border }, routeTransferText: { flex: 1, color: C.muted, fontSize: 11, fontWeight: "700" }, walkLegSummary: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 15, backgroundColor: "rgba(36,110,141,0.06)", borderWidth: 1, borderColor: "rgba(36,110,141,0.18)", borderStyle: "dashed" }, walkLegText: { flex: 1, color: C.teal, fontSize: 12, fontWeight: "700" }, detailToggle: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginTop: 8 }, detailToggleText: { color: C.navy, fontSize: 13, fontWeight: "800" },
+  resultArea: { marginTop: 28 }, routePreferenceGroup: { flexDirection: "row", padding: 3, borderRadius: 16, marginBottom: 15 }, routePreferenceButton: { flex: 1, minHeight: 72, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, borderRadius: 14 }, routePreferencePill: { position: "absolute", top: 3, bottom: 3, left: 3, borderRadius: 14, backgroundColor: "rgba(11,91,149,0.09)", borderWidth: 1, borderColor: "rgba(11,91,149,0.24)" }, routePreferenceLabel: { color: C.muted, fontSize: 13, fontWeight: "800" }, routePreferenceLabelActive: { color: C.navy }, routePreferenceMeta: { color: C.ink, fontSize: 12, fontWeight: "700", marginTop: 2 }, routePreferenceMetaActive: { color: C.navy }, routePreferenceHint: { color: C.muted, fontSize: 9, marginTop: 2 }, routePreferenceHintActive: { color: C.teal }, alternativeGroup: { flexDirection: "row", gap: 8, marginBottom: 12 }, alternativeChip: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 14, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface }, alternativeChipActive: { borderColor: C.navy, backgroundColor: "rgba(11,91,149,0.08)" }, alternativeChipText: { color: C.muted, fontSize: 12, fontWeight: "700" }, alternativeChipTextActive: { color: C.navy }, resultOverlineRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 9 }, resultOverline: { color: C.overline, fontSize: 12, fontWeight: "800" }, lastTrainBadge: { backgroundColor: C.danger, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 }, lastTrainBadgeText: { color: "#FFFFFF", fontSize: 10, fontWeight: "800" }, laterSection: { marginTop: 16 }, laterTitle: { color: C.overline, fontSize: 12, fontWeight: "800", marginBottom: 2 }, laterRow: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, borderRadius: 14, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, marginTop: 6 }, laterTime: { color: C.ink, fontSize: 14, fontWeight: "800" }, laterMeta: { flex: 1, color: C.muted, fontSize: 11, fontWeight: "700", textAlign: "right" }, resultHero: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 }, resultDeparture: { color: C.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", letterSpacing: -0.7 }, resultArrival: { color: C.ink, fontSize: 29, lineHeight: 33, fontWeight: "800", textAlign: "right", letterSpacing: -0.7 }, resultPlace: { color: C.muted, fontSize: 13, fontWeight: "700", marginTop: 3 }, resultArrowWrap: { alignItems: "center", gap: 1 }, resultDuration: { color: C.navy, fontSize: 13, fontWeight: "800" }, resultTransfer: { color: C.muted, fontSize: 11, fontWeight: "700" }, resultFare: { color: C.navy, fontSize: 12, fontWeight: "800", marginTop: 1 }, resultArrivalWrap: { alignItems: "flex-end" }, routeSteps: { marginTop: 18, gap: 8 }, routeLegSummary: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 16, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, routeLegColor: { width: 4, alignSelf: "stretch", borderRadius: 3 }, routeLegCopy: { flex: 1 }, routeLegHeading: { flexDirection: "row", alignItems: "center", gap: 8 }, linePill: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 10 }, linePillText: { fontSize: 11, fontWeight: "800" }, routeLegDirection: { flex: 1, color: C.ink, fontSize: 14, fontWeight: "800" }, routeLegMeta: { color: C.muted, fontSize: 11, marginTop: 5 }, routeTransferSummary: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, backgroundColor: C.surface, borderLeftWidth: 1, borderRightWidth: 1, borderColor: C.border }, routeTransferText: { flex: 1, color: C.muted, fontSize: 11, fontWeight: "700" }, walkLegSummary: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 15, backgroundColor: "rgba(36,110,141,0.06)", borderWidth: 1, borderColor: "rgba(36,110,141,0.18)", borderStyle: "dashed" }, walkLegText: { flex: 1, color: C.teal, fontSize: 12, fontWeight: "700" }, detailToggle: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginTop: 8 }, detailToggleText: { color: C.navy, fontSize: 13, fontWeight: "800" },
   detailList: { borderTopWidth: 1, borderTopColor: C.border, paddingTop: 12 }, detailLeg: { flexDirection: "row", minHeight: 72, gap: 9 }, detailLine: { width: 4, borderRadius: 2 }, detailLineWalk: { backgroundColor: C.lightMuted }, detailTimes: { justifyContent: "space-between", paddingVertical: 1 }, detailTime: { color: C.ink, fontSize: 13, fontWeight: "800" }, detailCopy: { flex: 1, justifyContent: "space-between", paddingBottom: 2 }, detailStation: { color: C.ink, fontSize: 14, fontWeight: "800" }, detailDirection: { color: C.muted, fontSize: 11 }, detailTransfer: { flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 8 }, detailConnector: { width: 4, height: 14, borderRadius: 2, backgroundColor: C.amber }, detailTransferText: { color: C.transferText, fontSize: 11, fontWeight: "700" }, detailFooter: { marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.border, flexDirection: "row", justifyContent: "space-between" }, detailFooterText: { color: C.muted, fontSize: 11, fontWeight: "700" },
-  dataRow: { marginTop: 27, minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 }, dataRowText: { flex: 1, color: C.muted, fontSize: 12, fontWeight: "700" }, dataDetail: { paddingTop: 3, paddingBottom: 3 }, dataRevisionText: { color: C.navy, fontSize: 10, lineHeight: 15, marginVertical: 8, fontWeight: "700" }, dataPrivacyText: { color: C.muted, fontSize: 10, lineHeight: 15 }, dialogBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: "rgba(18,27,35,0.28)" }, cacheDialog: { width: "100%", maxWidth: 360, padding: 22, borderRadius: 22, alignItems: "center", backgroundColor: C.surface, borderWidth: 1, borderColor: "rgba(18,117,187,0.16)", shadowColor: "#0B5B95", shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 8 }, cacheDialogIcon: { width: 44, height: 44, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11,91,149,0.09)" }, cacheDialogTitle: { color: C.ink, fontSize: 18, fontWeight: "800", marginTop: 14 }, cacheDialogText: { color: C.muted, fontSize: 13, lineHeight: 20, textAlign: "center", marginTop: 8 }, cacheDialogHint: { color: C.lightMuted, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: 5 }, cacheDialogActions: { width: "100%", flexDirection: "row", gap: 9, marginTop: 21 }, cacheDialogCancel: { flex: 1, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, cacheDialogCancelText: { color: C.muted, fontSize: 13, fontWeight: "800" }, cacheDialogConfirm: { flex: 1.35, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: C.navy }, cacheDialogConfirmDisabled: { opacity: 0.7 }, cacheDialogConfirmText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
+  themeRow: { marginTop: 27, minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 }, themeSegmented: { flexDirection: "row", padding: 3, gap: 3, borderRadius: 13, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, themeSegment: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 }, themeSegmentActive: { backgroundColor: C.navy }, themeSegmentText: { color: C.muted, fontSize: 11, fontWeight: "700" }, themeSegmentTextActive: { color: C.surface }, dataRow: { marginTop: 2, minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 }, dataRowText: { flex: 1, color: C.muted, fontSize: 12, fontWeight: "700" }, dataDetail: { paddingTop: 3, paddingBottom: 3 }, dataRevisionText: { color: C.navy, fontSize: 10, lineHeight: 15, marginVertical: 8, fontWeight: "700" }, dataPrivacyText: { color: C.muted, fontSize: 10, lineHeight: 15 }, dialogBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: "rgba(18,27,35,0.28)" }, cacheDialog: { width: "100%", maxWidth: 360, padding: 22, borderRadius: 22, alignItems: "center", backgroundColor: C.surface, borderWidth: 1, borderColor: "rgba(18,117,187,0.16)", shadowColor: "#0B5B95", shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 8 }, cacheDialogIcon: { width: 44, height: 44, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11,91,149,0.09)" }, cacheDialogTitle: { color: C.ink, fontSize: 18, fontWeight: "800", marginTop: 14 }, cacheDialogText: { color: C.muted, fontSize: 13, lineHeight: 20, textAlign: "center", marginTop: 8 }, cacheDialogHint: { color: C.lightMuted, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: 5 }, cacheDialogActions: { width: "100%", flexDirection: "row", gap: 9, marginTop: 21 }, cacheDialogCancel: { flex: 1, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, cacheDialogCancelText: { color: C.muted, fontSize: 13, fontWeight: "800" }, cacheDialogConfirm: { flex: 1.35, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: C.navy }, cacheDialogConfirmDisabled: { opacity: 0.7 }, cacheDialogConfirmText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
   sheetScreen: { flex: 1, backgroundColor: C.canvas }, sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 17, backgroundColor: C.surface }, sheetOverline: { color: C.teal, fontSize: 11, fontWeight: "800" }, sheetTitle: { color: C.ink, fontSize: 24, fontWeight: "800", marginTop: 3 }, sheetClose: { width: 38, height: 38, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: C.elevated }, stationKindSegmented: { flexDirection: "row", marginHorizontal: 16, marginBottom: 12, padding: 3, gap: 3, borderRadius: 15, backgroundColor: "rgba(11,91,149,0.07)", borderWidth: 1, borderColor: "rgba(11,91,149,0.16)" }, stationKindSegment: { flex: 1, height: 36, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 }, stationKindPill: { position: "absolute", top: 3, bottom: 3, left: 3, borderRadius: 12, backgroundColor: C.surface, borderWidth: 1, borderColor: "rgba(11,91,149,0.28)" }, stationKindSegmentText: { color: C.muted, fontSize: 12, fontWeight: "700" }, stationKindSegmentTextActive: { color: C.navy }, stationSearch: { margin: 16, minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderRadius: 16, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, stationSearchInput: { flex: 1, color: C.ink, fontFamily: "NotoSansJP", fontSize: 15, paddingVertical: 9 }, lineFilterScroll: { height: 42, flexGrow: 0, flexShrink: 0, marginBottom: 8 }, lineFilterContent: { paddingHorizontal: 16, gap: 8 }, lineFilterChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface }, lineFilterChipActive: { borderColor: C.navy, backgroundColor: "rgba(11,91,149,0.08)" }, lineFilterDot: { width: 7, height: 7, borderRadius: 4 }, lineFilterText: { color: C.muted, fontSize: 11, fontWeight: "700" }, lineFilterTextActive: { color: C.navy }, stationCount: { color: C.muted, marginHorizontal: 20, marginBottom: 7, fontSize: 12 }, stationList: { paddingHorizontal: 16, paddingBottom: 28 }, stationOption: { minHeight: 55, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, backgroundColor: C.surface, borderBottomWidth: 1, borderBottomColor: C.border }, stationOptionDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.teal }, stationOptionHighlighted: { backgroundColor: "rgba(11,91,149,0.08)" }, stationOptionCopy: { flex: 1 }, stationOptionText: { color: C.ink, fontSize: 16, fontWeight: "700" }, stationOptionLines: { color: C.muted, fontSize: 11, fontWeight: "600", marginTop: 1 }, emptyStationText: { color: C.muted, textAlign: "center", padding: 30 },
   nowButton: { alignSelf: "flex-start", margin: 20, marginBottom: 7, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 13, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, nowButtonText: { color: C.muted, fontSize: 13, fontWeight: "800" }, optionSection: { marginHorizontal: 20, marginTop: 18 }, optionHeading: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }, optionLabel: { color: C.ink, fontSize: 13, fontWeight: "800" }, autoText: { color: C.muted, fontSize: 11, fontWeight: "800" }, optionInput: { minHeight: 50, marginTop: 9, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 13, borderRadius: 15, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, optionTextInput: { flex: 1, color: C.ink, fontFamily: "NotoSansJP", fontSize: 15, fontWeight: "700", paddingVertical: 8 }, segmented: { marginTop: 9, padding: 3, flexDirection: "row", borderRadius: 15, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, segment: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 12 }, segmentActive: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }, segmentText: { color: C.muted, fontSize: 13, fontWeight: "700" }, segmentTextActive: { color: C.navy }, optionHint: { color: C.muted, fontSize: 11, lineHeight: 16, marginTop: 8 }, applyButton: { minHeight: 54, marginHorizontal: 20, marginTop: 29, alignItems: "center", justifyContent: "center", borderRadius: 18, backgroundColor: C.navy }, applyButtonText: { color: C.surface, fontSize: 16, fontWeight: "800" },
 });
@@ -1023,5 +1235,5 @@ const lightStyles = createStyles(COLORS);
 const darkStyles = createStyles(DARK_COLORS);
 
 function useAppStyles() {
-  return useColorScheme() === "dark" ? darkStyles : lightStyles;
+  return useTheme().effectiveScheme === "dark" ? darkStyles : lightStyles;
 }
