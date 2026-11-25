@@ -33,4 +33,13 @@ if (totalBytes > LIMIT_BYTES) {
   process.exit(1);
 }
 
+// マニフェストのアイコン（/icon.png）が assets/images/icon.png と一致すること
+import { createHash } from "node:crypto";
+const md5Of = (path) => createHash("md5").update(readFileSync(path)).digest("hex");
+const rootDir = join(distDir, "..");
+if (md5Of(join(distDir, "icon.png")) !== md5Of(join(rootDir, "assets", "images", "icon.png"))) {
+  console.error("check-dist: dist/icon.png が assets/images/icon.png と一致しません");
+  process.exit(1);
+}
+
 console.log(`check-dist: OK (entry ${entries.length} file(s), ${totalBytes} bytes)`);

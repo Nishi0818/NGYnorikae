@@ -5,7 +5,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "dev": "cross-env NODE_ENV=development EXPO_NO_METRO_WORKSPACE_ROOT=1 npx expo start --web --port ${EXPO_PORT:-8081}",
-    "build:web": "cross-env NODE_ENV=production EXPO_NO_METRO_WORKSPACE_ROOT=1 expo export --platform web --max-workers 1",
+    "build:web": "cross-env NODE_ENV=production EXPO_NO_METRO_WORKSPACE_ROOT=1 expo export --platform web --max-workers 1 && node scripts/fix-dist-icon.mjs",
     "check": "tsc --noEmit",
     "lint": "expo lint",
     "format": "prettier --write .",
